@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015  # pass/fail always return 0; && ... || is safe throughout
 set -euo pipefail
 
 PASS=0
 FAIL=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-pass() { echo "  ✓ $1"; PASS=$((PASS+1)); }
-fail() { echo "  ✗ $1"; FAIL=$((FAIL+1)); }
+pass() { echo "  ✓ $1"; PASS=$((PASS+1)); return 0; }
+fail() { echo "  ✗ $1"; FAIL=$((FAIL+1)); return 0; }
 
 # ── Test 1: snapshot save logic ───────────────────────────────────────────────
 echo "1. Snapshot save logic"

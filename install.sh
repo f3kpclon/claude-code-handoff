@@ -10,6 +10,7 @@ VERSION=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')
 # ── CUSTOMIZE ────────────────────────────────────────────────────────────────
 THRESHOLDS="70 80 90"
 DIALOG_TITLE="Claude Code — Handoff"
+# shellcheck disable=SC2016
 DIALOG_MSG='Context at ${PCT_INT}% — generate handoff snapshot to continue in a new session?'
 CONFIRM_MSG="💾 listo mi shan!! guarda'o el handoff"
 # ─────────────────────────────────────────────────────────────────────────────

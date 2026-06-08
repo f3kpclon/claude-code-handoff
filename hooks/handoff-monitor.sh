@@ -6,13 +6,6 @@ DIALOG_MSG="Context at \${PCT_INT}% — generate handoff snapshot to continue in
 # ─────────────────────────────────────────────────────────────────────────────
 INPUT=$(cat)
 
-# ── Auto-save snapshot when Claude just generated one ──────────────────────
-LAST_MSG=$(echo "$INPUT" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d.get('last_assistant_message', ''))
-" 2>/dev/null)
-
 # ── Context threshold warnings ──────────────────────────────────────────────
 PCT=$(cat ~/.claude/ctx_pct.txt 2>/dev/null)
 
