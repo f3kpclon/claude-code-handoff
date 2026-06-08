@@ -36,7 +36,7 @@ New session         → paste snapshot → Claude confirms and resumes
 
 | Level | Emoji | Message |
 |-------|-------|---------|
-| < 30% | 🥬 | fresco como lechuga |
+| < 30% | 😈 | listo mi guasho! estamo' entero activa'os |
 | 30–50% | 😎 | tranqui |
 | 50–60% | 🔥 | se calienta la cosa |
 | 60–70% | 👻 | en cualquier momento me voy en la vola' |
