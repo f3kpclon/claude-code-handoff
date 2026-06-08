@@ -114,9 +114,7 @@ Every pull request runs three automated checks via GitHub Actions:
 | Tests | Runs the full test suite (`bash test.sh`) |
 | Security scan | Detects dangerous patterns in `hooks/`, `install.sh`, and `commands/` — outbound network calls, base64 decode, raw TCP, netcat, dynamic `exec` |
 
-**Branch protection** (recommended for forks — enable in GitHub → Settings → Branches):
-- Require status checks: `ShellCheck`, `Tests`, `Security Scan`
-- Require branches to be up to date before merging
+**Branch protection** is active on this repo: all three checks must pass before any PR can merge, and direct pushes to `main` are restricted to the codeowner. For forks, enable it manually in GitHub → Settings → Branches.
 
 ## Uninstall
 
