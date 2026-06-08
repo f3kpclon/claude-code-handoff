@@ -75,7 +75,17 @@ Snapshots are **on-demand**: zero token cost unless you paste one into a new ses
 
 ## Customization
 
-Edit the `# ── CUSTOMIZE` block in `install.sh` before installing, or edit the installed files directly in `~/.claude/` after:
+Edit the `# ── CUSTOMIZE` block in `install.sh` before installing — values are injected into all files automatically:
+
+```bash
+# ── CUSTOMIZE ────────────────────────────────────────────────────────────────
+THRESHOLDS="70 80 90"
+DIALOG_TITLE="Claude Code — Handoff"
+DIALOG_MSG='Context at ${PCT_INT}% — generate handoff snapshot to continue in a new session?'
+CONFIRM_MSG="💾 listo mi shan!! guarda'o el handoff"
+```
+
+To change after installing, edit the `# ── CUSTOMIZE` block in each file under `~/.claude/`:
 
 | What | File | Variable |
 |------|------|----------|
