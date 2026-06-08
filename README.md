@@ -11,6 +11,8 @@ Preserves context between Claude Code sessions. Detects when context is running 
 ## Install
 
 ```bash
+git clone https://github.com/f3kpclon/claude-code-handoff
+cd claude-code-handoff
 bash install.sh
 ```
 
