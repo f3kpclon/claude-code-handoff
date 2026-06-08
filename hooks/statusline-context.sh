@@ -6,7 +6,7 @@ L70_DOT="🔪"; L70_MSG="me pase po"
 L60_DOT="👻"; L60_MSG="en cualquier momento me voy en la vola'"
 L50_DOT="🔥"; L50_MSG="se calienta la cosa"
 L30_DOT="😎"; L30_MSG="tranqui"
-L00_DOT="🥬"; L00_MSG="fresco como lechuga"
+L00_DOT="😈"; L00_MSG="listo mi guasho! estamo' entero activa'os"
 # ─────────────────────────────────────────────────────────────────────────────
 
 input=$(cat)
