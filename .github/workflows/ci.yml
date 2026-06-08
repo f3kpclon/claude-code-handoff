@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: '.'
+          ignore_paths: addons
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run test suite
+        run: bash test.sh
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan for dangerous patterns
+        run: |
+          SENSITIVE_FILES=$(find hooks/ install.sh uninstall.sh commands/ -type f 2>/dev/null)
+          FOUND=0
+
+          scan() {
+            local pattern="$1"
+            local label="$2"
+            # grep -n prints file:line:match; we exclude known-safe existing lines
+            while IFS= read -r hit; do
+              echo "⚠ $label → $hit"
+              FOUND=$((FOUND+1))
+            done < <(grep -rn "$pattern" $SENSITIVE_FILES 2>/dev/null \
+              | grep -v 'handoff-monitor.sh:41:' )   # known eval for DIALOG_MSG expansion
+          }
+
+          scan 'curl '          'outbound curl'
+          scan 'wget '          'outbound wget'
+          scan 'base64 -d'      'base64 decode (payload obfuscation)'
+          scan '/dev/tcp'       'raw TCP connection'
+          scan 'nc '            'netcat'
+          scan 'python3 -c.*exec' 'dynamic python exec'
+
+          if [ "$FOUND" -gt 0 ]; then
+            echo ""
+            echo "Security scan failed: $FOUND suspicious pattern(s) detected in sensitive files."
+            echo "Review the findings above before merging."
+            exit 1
+          fi
+
+          echo "Security scan passed."

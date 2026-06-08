@@ -104,6 +104,20 @@ bash test.sh
 
 Verifies snapshot save logic, install idempotency, and sentinel behavior. 16 assertions.
 
+## Security
+
+Every pull request runs three automated checks via GitHub Actions:
+
+| Check | What it does |
+|-------|-------------|
+| ShellCheck | Lints all `.sh` files for errors and unsafe patterns |
+| Tests | Runs the full test suite (`bash test.sh`) |
+| Security scan | Detects dangerous patterns in `hooks/`, `install.sh`, and `commands/` — outbound network calls, base64 decode, raw TCP, netcat, dynamic `exec` |
+
+**Branch protection** (recommended for forks — enable in GitHub → Settings → Branches):
+- Require status checks: `ShellCheck`, `Tests`, `Security Scan`
+- Require branches to be up to date before merging
+
 ## Uninstall
 
 ```bash
