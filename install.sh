@@ -8,7 +8,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')
 
 # ── CUSTOMIZE ────────────────────────────────────────────────────────────────
-THRESHOLDS="70 80 90"   # context % levels that trigger the dialog
+THRESHOLDS="70 80 90"
+DIALOG_TITLE="Claude Code — Handoff"
+DIALOG_MSG='Context at ${PCT_INT}% — generate handoff snapshot to continue in a new session?'
+CONFIRM_MSG="💾 listo mi shan!! guarda'o el handoff"
 # ─────────────────────────────────────────────────────────────────────────────
 
 echo "Installing Claude Code Handoff v${VERSION}..."
@@ -43,8 +46,11 @@ echo "✓ /handoff command installed"
 cp "$SCRIPT_DIR/hooks/statusline-context.sh"  "$HOOKS_DIR/statusline-context.sh"
 cp "$SCRIPT_DIR/hooks/handoff-monitor.sh"     "$HOOKS_DIR/handoff-monitor.sh"
 cp "$SCRIPT_DIR/hooks/handoff-inject.sh"      "$HOOKS_DIR/handoff-inject.sh"
-# Write configured thresholds into the installed hook
+# Inject CUSTOMIZE values into installed files
 sed -i.bak "s/^THRESHOLDS=.*/THRESHOLDS=(${THRESHOLDS})/" "$HOOKS_DIR/handoff-monitor.sh" && rm -f "$HOOKS_DIR/handoff-monitor.sh.bak"
+sed -i.bak "s|^DIALOG_TITLE=.*|DIALOG_TITLE=\"${DIALOG_TITLE}\"|" "$HOOKS_DIR/handoff-monitor.sh" && rm -f "$HOOKS_DIR/handoff-monitor.sh.bak"
+sed -i.bak "s|^DIALOG_MSG=.*|DIALOG_MSG='${DIALOG_MSG}'|" "$HOOKS_DIR/handoff-monitor.sh" && rm -f "$HOOKS_DIR/handoff-monitor.sh.bak"
+sed -i.bak "s|^💾 .*|${CONFIRM_MSG}|" "$COMMANDS_DIR/handoff.md" && rm -f "$COMMANDS_DIR/handoff.md.bak"
 chmod +x "$HOOKS_DIR/statusline-context.sh" "$HOOKS_DIR/handoff-monitor.sh" "$HOOKS_DIR/handoff-inject.sh"
 echo "✓ hooks installed (thresholds: ${THRESHOLDS})"
 

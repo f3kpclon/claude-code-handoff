@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# ── CONFIG ───────────────────────────────────────────────────────────────────
+# ── CUSTOMIZE ────────────────────────────────────────────────────────────────
 THRESHOLDS=(70 80 90)
+DIALOG_TITLE="Claude Code — Handoff"
+DIALOG_MSG="Context at \${PCT_INT}% — generate handoff snapshot to continue in a new session?"
 # ─────────────────────────────────────────────────────────────────────────────
 INPUT=$(cat)
 
@@ -35,8 +37,8 @@ done
 
 touch "/tmp/handoff_w${THRESHOLD}_${SESSION}"
 
-TITLE="Claude Code — Handoff"
-MSG="Context at ${PCT_INT}% — generate handoff snapshot to continue in a new session?"
+TITLE="$DIALOG_TITLE"
+MSG=$(eval echo "$DIALOG_MSG")
 
 case "$OSTYPE" in
   darwin*)

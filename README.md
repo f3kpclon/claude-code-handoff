@@ -75,11 +75,15 @@ Snapshots are **on-demand**: zero token cost unless you paste one into a new ses
 
 ## Customization
 
-Thresholds and status bar messages are defined at the top of each hook script — edit them directly:
+Edit the `# ── CUSTOMIZE` block in `install.sh` before installing, or edit the installed files directly in `~/.claude/` after:
 
-- Dialog thresholds: `hooks/handoff-monitor.sh` → `THRESHOLDS=(70 80 90)`
-- Status messages: `hooks/statusline-context.sh` → emoji/message lines
-- Confirmation message: `commands/handoff.md` → last line of the skill
+| What | File | Variable |
+|------|------|----------|
+| Context thresholds | `hooks/handoff-monitor.sh` | `THRESHOLDS` |
+| Dialog title | `hooks/handoff-monitor.sh` | `DIALOG_TITLE` |
+| Dialog message | `hooks/handoff-monitor.sh` | `DIALOG_MSG` |
+| Confirmation message | `commands/handoff.md` | line starting with `💾` |
+| Status bar emoji + text | `hooks/statusline-context.sh` | `L90_DOT`, `L90_MSG`, etc. |
 
 ## Test
 

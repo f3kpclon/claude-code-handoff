@@ -59,4 +59,5 @@ cat "$HDIR/latest.md" | pbcopy 2>/dev/null || true
 No muestres el contenido del snapshot en el chat. Cuando el Bash termine, responde únicamente con esta línea (nada más):
 
 💾 listo mi shan!! guarda'o el handoff
+
 `{path completo a latest.md}`
