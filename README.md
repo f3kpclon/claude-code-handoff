@@ -25,7 +25,8 @@ Every response      → status bar shows live context usage
 At 70 / 80 / 90%   → native OS dialog: "Generate snapshot?"
 User clicks Yes     → Claude composes snapshot internally (not shown in chat)
 Bash writes to disk → {repo}/.claude/handoffs/YYYY-MM-DD_HHmm.md + latest.md
-                      .gitignore updated automatically
+                      .claude/handoffs/ created automatically if it doesn't exist
+                      .gitignore updated automatically (entry added if missing)
                       snapshot copied to clipboard
 Claude confirms     → "💾 listo mi shan!! guarda'o el handoff" printed in chat
 New session         → paste snapshot → Claude confirms and resumes
