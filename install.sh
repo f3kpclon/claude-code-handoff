@@ -24,6 +24,12 @@ if ! command -v python3 &>/dev/null; then
   exit 1
 fi
 
+if ! command -v jq &>/dev/null; then
+  echo "✗ jq not found — required for the status line."
+  echo "  → brew install jq   or   sudo apt install jq"
+  exit 1
+fi
+
 case "$OSTYPE" in
   darwin*)
     command -v osascript &>/dev/null || echo "⚠ osascript not found — dialog won't show on macOS (unexpected)"
