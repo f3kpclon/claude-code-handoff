@@ -39,13 +39,13 @@ The status bar renders up to 4 lines depending on your plan:
 
 ```
 [claude-sonnet-4-6] | Branch: 🌿 main +1 ~2 | 💰 $0.03
-😈 [████████░░░░░░░░░░░░] 45% — listo mi guasho!
-⏱ Cupo horario    🔪 [███████████████░░░░░] 75% — se acaba el turno weón
-📅 Cupo semanal   😎 [████░░░░░░░░░░░░░░░░] 23% — tranqui, semana larga
+🧠 Contexto       😈 [████████░░░░░░░░░░░░] 45% — listo mi guasho!
+⏱ Cupo horario   🔪 [███████████████░░░░░] 75% — se acaba el turno weón
+📅 Cupo semanal  😎 [████░░░░░░░░░░░░░░░░] 23% — tranqui, semana larga
 ```
 
 **Line 1** — always shown: active model ID, git branch + staged/modified count, session cost.  
-**Line 2** — always shown: context window usage bar.  
+**Line 2** — always shown: session context window usage bar.  
 **Lines 3–4** — Pro/Max only: 5-hour rolling quota and 7-day weekly quota bars.
 
 **Context window levels:**
@@ -132,7 +132,7 @@ To change after installing, edit the `# ── CUSTOMIZE` block in each file und
 | Dialog title | `hooks/handoff-monitor.sh` | `DIALOG_TITLE` |
 | Dialog message | `hooks/handoff-monitor.sh` | `DIALOG_MSG` |
 | Confirmation message | `commands/handoff.md` | line starting with `💾` |
-| Context bar emoji + text | `hooks/statusline-context.sh` | `L90_DOT`, `L90_MSG`, etc. |
+| Contexto bar emoji + text | `hooks/statusline-context.sh` | `L90_DOT`, `L90_MSG`, etc. |
 | Hourly quota emoji + text | `hooks/statusline-context.sh` | `RH90_DOT`, `RH90_MSG`, etc. |
 | Weekly quota emoji + text | `hooks/statusline-context.sh` | `RS90_DOT`, `RS90_MSG`, etc. |
 
