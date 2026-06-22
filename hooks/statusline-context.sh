@@ -83,7 +83,7 @@ elif [ "$pct_int" -ge 50 ]; then color="$YELLOW"; dot="$L50_DOT"; msg="$L50_MSG"
 elif [ "$pct_int" -ge 30 ]; then color="$GREEN";  dot="$L30_DOT"; msg="$L30_MSG"
 else                              color="$GREEN";  dot="$L00_DOT"; msg="$L00_MSG"
 fi
-echo "${dot} ${color}[$(make_bar "$pct_int")] ${pct_int}% — ${msg}${RESET}"
+echo "🧠 Contexto       ${dot} ${color}[$(make_bar "$pct_int")] ${pct_int}% — ${msg}${RESET}"
 
 # ── Line 3: Cupo horario (5h) — solo Pro/Max ─────────────────────────────────
 if [ -n "$FIVE_H" ]; then
