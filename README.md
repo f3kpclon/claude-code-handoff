@@ -6,6 +6,7 @@ Preserves context between Claude Code sessions. Detects when context is running 
 
 - Claude Code
 - Python 3
+- jq (`brew install jq` / `sudo apt install jq`)
 - macOS, Linux (GNOME/KDE), or Windows (Git Bash / WSL)
 
 ## Install
@@ -34,6 +35,21 @@ New session         → paste snapshot → Claude confirms and resumes
 
 ### Status bar
 
+The status bar renders up to 4 lines depending on your plan:
+
+```
+[claude-sonnet-4-6] | Branch: 🌿 main +1 ~2 | 💰 $0.03
+😈 [████████░░░░░░░░░░░░] 45% — listo mi guasho!
+⏱ Cupo horario    🔪 [███████████████░░░░░] 75% — se acaba el turno weón
+📅 Cupo semanal   😎 [████░░░░░░░░░░░░░░░░] 23% — tranqui, semana larga
+```
+
+**Line 1** — always shown: active model ID, git branch + staged/modified count, session cost.  
+**Line 2** — always shown: context window usage bar.  
+**Lines 3–4** — Pro/Max only: 5-hour rolling quota and 7-day weekly quota bars.
+
+**Context window levels:**
+
 | Level | Emoji | Message |
 |-------|-------|---------|
 | < 30% | 😈 | listo mi guasho! estamo' entero activa'os |
@@ -44,7 +60,29 @@ New session         → paste snapshot → Claude confirms and resumes
 | 80–90% | 💀 | ¿qué hacíamos? |
 | ≥ 90% | 🆘 | handoff altiro weón |
 
-> Colors require ANSI support. If you see escape codes, remove the color lines in `hooks/statusline-context.sh`.
+**Cupo horario (5h rolling) levels:**
+
+| Level | Emoji | Message |
+|-------|-------|---------|
+| < 30% | 😈 | hay turno, estamo' entero |
+| 30–50% | 😎 | tranqui, hay cupo |
+| 50–70% | 🔥 | vamos consumiendo el turno |
+| 70–80% | 🔪 | se acaba el turno weón |
+| 80–90% | 💀 | casi sin cupo horario |
+| ≥ 90% | 🆘 | quedando pato weón! al 100 no money no honey |
+
+**Cupo semanal (7d) levels:**
+
+| Level | Emoji | Message |
+|-------|-------|---------|
+| < 30% | 😈 | semana entera por delante |
+| 30–50% | 😎 | tranqui, semana larga |
+| 50–70% | 🔥 | mitad de semana consumida |
+| 70–80% | 👻 | ojo con el cupo semanal |
+| 80–90% | 💀 | casi sin cupo esta semana |
+| ≥ 90% | 🆘 | llama a soporte weón |
+
+> Colors require ANSI support. If you see escape codes, check your terminal settings.
 
 ## Manual triggers
 
@@ -94,7 +132,9 @@ To change after installing, edit the `# ── CUSTOMIZE` block in each file und
 | Dialog title | `hooks/handoff-monitor.sh` | `DIALOG_TITLE` |
 | Dialog message | `hooks/handoff-monitor.sh` | `DIALOG_MSG` |
 | Confirmation message | `commands/handoff.md` | line starting with `💾` |
-| Status bar emoji + text | `hooks/statusline-context.sh` | `L90_DOT`, `L90_MSG`, etc. |
+| Context bar emoji + text | `hooks/statusline-context.sh` | `L90_DOT`, `L90_MSG`, etc. |
+| Hourly quota emoji + text | `hooks/statusline-context.sh` | `RH90_DOT`, `RH90_MSG`, etc. |
+| Weekly quota emoji + text | `hooks/statusline-context.sh` | `RS90_DOT`, `RS90_MSG`, etc. |
 
 ## Test
 
