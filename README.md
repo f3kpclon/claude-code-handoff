@@ -89,8 +89,10 @@ The status bar renders up to 4 lines depending on your plan:
 Type any of these at any time:
 
 ```
-/handoff        — slash command (explicit)
-pausa sesión    — phrase trigger
+/handoff         — slash command (explicit)
+pausa sesión     — pause mid-session
+cierra sesión    — save and close
+termina sesión   — save and close
 ```
 
 ## Platform support
