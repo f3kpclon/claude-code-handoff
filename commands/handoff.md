@@ -45,14 +45,14 @@ date "+%Y-%m-%d %H:%M" && git rev-parse --show-toplevel 2>/dev/null || pwd
 
 ```bash
 REPO=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-HDIR="$REPO/.claude/handoffs"
+REPO_NAME=$(basename "$REPO")
+HDIR="$HOME/.claude/handoffs/$REPO_NAME"
 mkdir -p "$HDIR"
 TS=$(date '+%Y-%m-%d_%H%M')
 cat > "$HDIR/$TS.md" << 'HANDOFF_END'
 [CONTENIDO REAL DEL SNAPSHOT — reemplazar esta línea con el texto completo]
 HANDOFF_END
 cp "$HDIR/$TS.md" "$HDIR/latest.md"
-grep -qF '.claude/handoffs/' "$REPO/.gitignore" 2>/dev/null || echo '.claude/handoffs/' >> "$REPO/.gitignore"
 cat "$HDIR/latest.md" | pbcopy 2>/dev/null || true
 ```
 

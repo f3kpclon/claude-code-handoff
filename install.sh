@@ -61,9 +61,16 @@ sed -i.bak "s|^💾 .*|${CONFIRM_MSG}|" "$COMMANDS_DIR/handoff.md" && rm -f "$CO
 chmod +x "$HOOKS_DIR/statusline-context.sh" "$HOOKS_DIR/handoff-monitor.sh" "$HOOKS_DIR/handoff-inject.sh"
 echo "✓ hooks installed (thresholds: ${THRESHOLDS})"
 
-# ── CLAUDE.md — append protocol if not present ───────────────────────────────
-if grep -q "## Handoff Protocol" "$CLAUDE_DIR/CLAUDE.md" 2>/dev/null; then
-  echo "✓ CLAUDE.md — already present, skipped"
+# ── CLAUDE.md — append or upgrade protocol ───────────────────────────────────
+OLD_TRIGGER="Si el mensaje o contexto adicional contiene \`handoff\`"
+NEW_TRIGGER=$(grep "Si el contexto adicional contiene" "$SCRIPT_DIR/CLAUDE.md")
+
+if grep -q "$OLD_TRIGGER" "$CLAUDE_DIR/CLAUDE.md" 2>/dev/null; then
+  # Upgrade: replace broad keyword trigger with specific one
+  sed -i.bak "s|.*${OLD_TRIGGER}.*|${NEW_TRIGGER}|" "$CLAUDE_DIR/CLAUDE.md" && rm -f "$CLAUDE_DIR/CLAUDE.md.bak"
+  echo "✓ CLAUDE.md — trigger upgraded (broad → specific)"
+elif grep -q "## Handoff Protocol" "$CLAUDE_DIR/CLAUDE.md" 2>/dev/null; then
+  echo "✓ CLAUDE.md — already up to date, skipped"
 else
   echo "" >> "$CLAUDE_DIR/CLAUDE.md"
   cat "$SCRIPT_DIR/CLAUDE.md" >> "$CLAUDE_DIR/CLAUDE.md"
@@ -114,10 +121,10 @@ echo ""
 echo "What to expect:"
 echo "  • Status bar shows context usage on every response"
 echo "  • At 70/80/90% a dialog asks to generate a snapshot"
-echo "  • Snapshots saved per-repo to {repo}/.claude/handoffs/ (auto-ignored by git)"
+echo "  • Snapshots saved to ~/.claude/handoffs/{repo-name}/ — outside the repo, never committable"
 echo "  • latest.md always available for quick access"
 echo "  • Snapshot content stays out of chat — one-line confirmation only"
 echo "  • Paste any snapshot at the start of a new session to resume"
 echo ""
-echo "Manual trigger anytime: type 'handoff' or '/handoff'"
+echo "Manual trigger anytime: type '/handoff' or 'pausa sesión'"
 echo "Uninstall: bash uninstall.sh"

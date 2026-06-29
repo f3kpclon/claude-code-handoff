@@ -25,9 +25,9 @@ Copies hooks and command to `~/.claude/`, registers them in `settings.json`, and
 Every response      → status bar shows live context usage
 At 70 / 80 / 90%   → native OS dialog: "Generate snapshot?"
 User clicks Yes     → Claude composes snapshot internally (not shown in chat)
-Bash writes to disk → {repo}/.claude/handoffs/YYYY-MM-DD_HHmm.md + latest.md
-                      .claude/handoffs/ created automatically if it doesn't exist
-                      .gitignore updated automatically (entry added if missing)
+Bash writes to disk → ~/.claude/handoffs/{repo-name}/YYYY-MM-DD_HHmm.md + latest.md
+                      directory created automatically if it doesn't exist
+                      stored outside the repo — never committable by design
                       snapshot copied to clipboard
 Claude confirms     → "💾 listo mi shan!! guarda'o el handoff" printed in chat
 New session         → paste snapshot → Claude confirms and resumes
@@ -89,7 +89,8 @@ The status bar renders up to 4 lines depending on your plan:
 Type any of these at any time:
 
 ```
-handoff   snapshot   pausa   /handoff
+/handoff        — slash command (explicit)
+pausa sesión    — phrase trigger
 ```
 
 ## Platform support
@@ -108,7 +109,9 @@ Paste the snapshot at the start of a new session. Claude confirms the objective 
 
 ## Snapshots
 
-Saved per-repo to `{repo}/.claude/handoffs/YYYY-MM-DD_HHmm.md` after each generation. A `latest.md` is always overwritten for quick access. The `.claude/handoffs/` entry is automatically added to the repo's `.gitignore` — snapshots are never committed.
+Saved to `~/.claude/handoffs/{repo-name}/YYYY-MM-DD_HHmm.md` after each generation. A `latest.md` is always overwritten for quick access.
+
+Snapshots are stored **outside the repo** — they can never be committed regardless of `.gitignore` configuration. Works with any project, with or without a `.claude/` directory.
 
 Snapshots are **on-demand**: zero token cost unless you paste one into a new session. There is no auto-injection at startup by design.
 
@@ -162,7 +165,7 @@ Every pull request runs three automated checks via GitHub Actions:
 bash uninstall.sh
 ```
 
-Removes all hooks, the `/handoff` command, and cleans `settings.json`. Restores `settings.json.bak` if available. Snapshots in `{repo}/.claude/handoffs/` are preserved.
+Removes all hooks, the `/handoff` command, and cleans `settings.json`. Restores `settings.json.bak` if available. Snapshots in `~/.claude/handoffs/` are preserved.
 
 ## Files
 
