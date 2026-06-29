@@ -44,11 +44,16 @@ case "$OSTYPE" in
 esac
 
 # ── Directories ──────────────────────────────────────────────────────────────
-mkdir -p "$COMMANDS_DIR" "$HOOKS_DIR"
+SKILLS_DIR="$CLAUDE_DIR/skills"
+mkdir -p "$COMMANDS_DIR" "$HOOKS_DIR" "$SKILLS_DIR/handoff" "$SKILLS_DIR/handoff-protocol"
 
 # ── Files ────────────────────────────────────────────────────────────────────
-cp "$SCRIPT_DIR/commands/handoff.md"          "$COMMANDS_DIR/handoff.md"
+cp "$SCRIPT_DIR/commands/handoff.md"                        "$COMMANDS_DIR/handoff.md"
 echo "✓ /handoff command installed"
+
+cp "$SCRIPT_DIR/skills/handoff/SKILL.md"          "$SKILLS_DIR/handoff/SKILL.md"
+cp "$SCRIPT_DIR/skills/handoff-protocol/SKILL.md" "$SKILLS_DIR/handoff-protocol/SKILL.md"
+echo "✓ skills installed"
 
 cp "$SCRIPT_DIR/hooks/statusline-context.sh"  "$HOOKS_DIR/statusline-context.sh"
 cp "$SCRIPT_DIR/hooks/handoff-monitor.sh"     "$HOOKS_DIR/handoff-monitor.sh"

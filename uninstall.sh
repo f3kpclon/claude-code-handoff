@@ -21,6 +21,14 @@ if [ -f "$CLAUDE_DIR/commands/handoff.md" ]; then
   echo "✓ removed commands/handoff.md"
 fi
 
+# ── Remove skills ─────────────────────────────────────────────────────────────
+for skill in handoff handoff-protocol; do
+  if [ -d "$CLAUDE_DIR/skills/$skill" ]; then
+    rm -rf "$CLAUDE_DIR/skills/$skill"
+    echo "✓ removed skills/$skill"
+  fi
+done
+
 # ── Restore settings.json ─────────────────────────────────────────────────────
 if [ -f "${SETTINGS}.bak" ]; then
   mv "${SETTINGS}.bak" "$SETTINGS"

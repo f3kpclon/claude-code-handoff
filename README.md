@@ -17,7 +17,7 @@ cd claude-code-handoff
 bash install.sh
 ```
 
-Copies hooks and command to `~/.claude/`, registers them in `settings.json`, and appends the handoff protocol to `CLAUDE.md`. Restart Claude Code after installing.
+Copies hooks, command, and skills to `~/.claude/`, registers them in `settings.json`, and appends the handoff protocol to `CLAUDE.md`. Restart Claude Code after installing.
 
 ## How it works
 
@@ -151,7 +151,7 @@ To change after installing, edit the `# ── CUSTOMIZE` block in each file und
 bash test.sh
 ```
 
-Verifies snapshot save logic, install idempotency, and sentinel behavior. 16 assertions.
+Verifies snapshot save logic, install idempotency, and sentinel behavior. 17 assertions.
 
 ## Security
 
@@ -171,7 +171,7 @@ Every pull request runs three automated checks via GitHub Actions:
 bash uninstall.sh
 ```
 
-Removes all hooks, the `/handoff` command, and cleans `settings.json`. Restores `settings.json.bak` if available. Snapshots in `~/.claude/handoffs/` are preserved.
+Removes all hooks, the `/handoff` command, skills, and cleans `settings.json`. Restores `settings.json.bak` if available. Snapshots in `~/.claude/handoffs/` are preserved.
 
 ## Files
 
@@ -179,9 +179,11 @@ Removes all hooks, the `/handoff` command, and cleans `settings.json`. Restores 
 |------|------|
 | `CLAUDE.md` | Handoff protocol — triggers and resume behavior for Claude |
 | `commands/handoff.md` | `/handoff` slash command — composes snapshot silently, writes to disk via Bash, prints one-line confirmation |
+| `skills/handoff/SKILL.md` | Handoff skill — same logic as the command, invoked by Claude when CLAUDE.md auto-triggers |
+| `skills/handoff-protocol/SKILL.md` | Snapshot format template — loaded by the handoff skill when composing the snapshot |
 | `hooks/statusline-context.sh` | Renders the context progress bar in the status line |
 | `hooks/handoff-monitor.sh` | Fires after each response — shows dialog at thresholds |
 | `hooks/handoff-inject.sh` | Injects handoff context on the next user message after dialog |
-| `test.sh` | 16 assertions — snapshot logic, install idempotency, sentinel behavior |
+| `test.sh` | 17 assertions — snapshot logic, install idempotency, sentinel behavior |
 | `install.sh` | Installs everything into `~/.claude/` |
 | `uninstall.sh` | Removes everything installed |
