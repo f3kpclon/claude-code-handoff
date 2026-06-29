@@ -70,7 +70,28 @@ if grep -q "$OLD_TRIGGER" "$CLAUDE_DIR/CLAUDE.md" 2>/dev/null; then
   sed -i.bak "s|.*${OLD_TRIGGER}.*|${NEW_TRIGGER}|" "$CLAUDE_DIR/CLAUDE.md" && rm -f "$CLAUDE_DIR/CLAUDE.md.bak"
   echo "✓ CLAUDE.md — trigger upgraded (broad → specific)"
 elif grep -q "## Handoff Protocol" "$CLAUDE_DIR/CLAUDE.md" 2>/dev/null; then
-  echo "✓ CLAUDE.md — already up to date, skipped"
+  # Upgrade: add resume trigger if missing
+  if ! grep -q "Resume trigger" "$CLAUDE_DIR/CLAUDE.md" 2>/dev/null; then
+    grep -n "Resume behavior" "$CLAUDE_DIR/CLAUDE.md" | head -1  # just to locate it
+    python3 - "$CLAUDE_DIR/CLAUDE.md" "$SCRIPT_DIR/CLAUDE.md" <<'PYEOF'
+import sys
+from pathlib import Path
+
+dest = Path(sys.argv[1])
+src  = Path(sys.argv[2])
+
+# Extract resume trigger block from source
+src_text = src.read_text()
+start = src_text.find('### Resume trigger')
+block = '\n' + src_text[start:].strip() + '\n'
+
+dest_text = dest.read_text()
+dest.write_text(dest_text.rstrip() + block + '\n')
+PYEOF
+    echo "✓ CLAUDE.md — resume trigger added"
+  else
+    echo "✓ CLAUDE.md — already up to date, skipped"
+  fi
 else
   echo "" >> "$CLAUDE_DIR/CLAUDE.md"
   cat "$SCRIPT_DIR/CLAUDE.md" >> "$CLAUDE_DIR/CLAUDE.md"

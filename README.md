@@ -105,7 +105,11 @@ pausa sesión    — phrase trigger
 
 ## Resuming a session
 
-Paste the snapshot at the start of a new session. Claude confirms the objective and continues from where you left off.
+Two ways to resume:
+
+**Option A — paste** (recommended): the snapshot is copied to your clipboard automatically. Paste it at the start of a new session. Claude detects the `## Objetivo` block and confirms before continuing.
+
+**Option B — ask**: if you forgot to paste or want to resume days later, just say "lee el último handoff" (or "retoma", "último snapshot"). Claude reads `~/.claude/handoffs/{repo-name}/latest.md` automatically and picks up from there.
 
 ## Snapshots
 
