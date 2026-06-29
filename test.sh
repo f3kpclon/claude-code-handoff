@@ -13,7 +13,9 @@ fail() { echo "  ✗ $1"; FAIL=$((FAIL+1)); return 0; }
 echo "1. Snapshot save logic"
 
 FAKE_REPO=$(mktemp -d)
-HDIR="$FAKE_REPO/.claude/handoffs"
+FAKE_HOME=$(mktemp -d)
+REPO_NAME=$(basename "$FAKE_REPO")
+HDIR="$FAKE_HOME/.claude/handoffs/$REPO_NAME"
 mkdir -p "$HDIR"
 TS=$(date '+%Y-%m-%d_%H%M')
 SNAPSHOT="# Handoff Snapshot\n**Fecha:** 2026-01-01\n## Objetivo\nTest"
@@ -21,21 +23,21 @@ SNAPSHOT="# Handoff Snapshot\n**Fecha:** 2026-01-01\n## Objetivo\nTest"
 printf "%b" "$SNAPSHOT" > "$HDIR/$TS.md"
 cp "$HDIR/$TS.md" "$HDIR/latest.md"
 
-grep -qF '.claude/handoffs/' "$FAKE_REPO/.gitignore" 2>/dev/null \
-  || echo '.claude/handoffs/' >> "$FAKE_REPO/.gitignore"
+[ -f "$HDIR/$TS.md" ]                          && pass "snapshot file created"             || fail "snapshot file missing"
+[ -f "$HDIR/latest.md" ]                       && pass "latest.md created"                 || fail "latest.md missing"
+[[ "$HDIR" == "$FAKE_HOME/.claude/handoffs/"* ]] && pass "snapshot outside repo"           || fail "snapshot inside repo"
+[ ! -f "$FAKE_REPO/.gitignore" ]               && pass "repo .gitignore not modified"      || fail ".gitignore was modified"
 
-[ -f "$HDIR/$TS.md" ]      && pass "snapshot file created"      || fail "snapshot file missing"
-[ -f "$HDIR/latest.md" ]   && pass "latest.md created"          || fail "latest.md missing"
-grep -qF '.claude/handoffs/' "$FAKE_REPO/.gitignore" \
-                            && pass ".gitignore updated"          || fail ".gitignore not updated"
+# idempotent: .git/info/exclude entry not duplicated
+mkdir -p "$FAKE_REPO/.git/info"
+grep -qF '.claude/handoffs/' "$FAKE_REPO/.git/info/exclude" 2>/dev/null \
+  || echo '.claude/handoffs/' >> "$FAKE_REPO/.git/info/exclude"
+grep -qF '.claude/handoffs/' "$FAKE_REPO/.git/info/exclude" 2>/dev/null \
+  || echo '.claude/handoffs/' >> "$FAKE_REPO/.git/info/exclude"
+COUNT=$(grep -c '.claude/handoffs/' "$FAKE_REPO/.git/info/exclude")
+[ "$COUNT" -eq 1 ]                             && pass "git exclude entry not duplicated"   || fail "git exclude has duplicate entry ($COUNT)"
 
-# idempotent: running again should not duplicate the gitignore entry
-grep -qF '.claude/handoffs/' "$FAKE_REPO/.gitignore" 2>/dev/null \
-  || echo '.claude/handoffs/' >> "$FAKE_REPO/.gitignore"
-COUNT=$(grep -c '.claude/handoffs/' "$FAKE_REPO/.gitignore")
-[ "$COUNT" -eq 1 ]         && pass ".gitignore entry not duplicated" || fail ".gitignore has duplicate entry ($COUNT)"
-
-rm -rf "$FAKE_REPO"
+rm -rf "$FAKE_REPO" "$FAKE_HOME"
 
 # ── Test 2: install.sh copies all required files ─────────────────────────────
 echo "2. install.sh file copies"
