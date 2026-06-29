@@ -58,12 +58,13 @@ echo "✓ skills installed"
 cp "$SCRIPT_DIR/hooks/statusline-context.sh"  "$HOOKS_DIR/statusline-context.sh"
 cp "$SCRIPT_DIR/hooks/handoff-monitor.sh"     "$HOOKS_DIR/handoff-monitor.sh"
 cp "$SCRIPT_DIR/hooks/handoff-inject.sh"      "$HOOKS_DIR/handoff-inject.sh"
+cp "$SCRIPT_DIR/hooks/pre-compact.sh"         "$HOOKS_DIR/pre-compact.sh"
 # Inject CUSTOMIZE values into installed files
 sed -i.bak "s/^THRESHOLDS=.*/THRESHOLDS=(${THRESHOLDS})/" "$HOOKS_DIR/handoff-monitor.sh" && rm -f "$HOOKS_DIR/handoff-monitor.sh.bak"
 sed -i.bak "s|^DIALOG_TITLE=.*|DIALOG_TITLE=\"${DIALOG_TITLE}\"|" "$HOOKS_DIR/handoff-monitor.sh" && rm -f "$HOOKS_DIR/handoff-monitor.sh.bak"
 sed -i.bak "s|^DIALOG_MSG=.*|DIALOG_MSG='${DIALOG_MSG}'|" "$HOOKS_DIR/handoff-monitor.sh" && rm -f "$HOOKS_DIR/handoff-monitor.sh.bak"
 sed -i.bak "s|^💾 .*|${CONFIRM_MSG}|" "$COMMANDS_DIR/handoff.md" && rm -f "$COMMANDS_DIR/handoff.md.bak"
-chmod +x "$HOOKS_DIR/statusline-context.sh" "$HOOKS_DIR/handoff-monitor.sh" "$HOOKS_DIR/handoff-inject.sh"
+chmod +x "$HOOKS_DIR/statusline-context.sh" "$HOOKS_DIR/handoff-monitor.sh" "$HOOKS_DIR/handoff-inject.sh" "$HOOKS_DIR/pre-compact.sh"
 echo "✓ hooks installed (thresholds: ${THRESHOLDS})"
 
 # ── CLAUDE.md — append or upgrade protocol ───────────────────────────────────
@@ -129,6 +130,7 @@ hooks = settings.setdefault('hooks', {})
 for event, cmd in [
     ('UserPromptSubmit', 'bash ~/.claude/hooks/handoff-inject.sh'),
     ('Stop',             'bash ~/.claude/hooks/handoff-monitor.sh'),
+    ('PreCompact',       'bash ~/.claude/hooks/pre-compact.sh'),
 ]:
     entries = hooks.setdefault(event, [])
     exists = any(h.get('command') == cmd for e in entries for h in e.get('hooks', []))
@@ -147,6 +149,7 @@ echo ""
 echo "What to expect:"
 echo "  • Status bar shows context usage on every response"
 echo "  • At 70/80/90% a dialog asks to generate a snapshot"
+echo "  • At context limit a PreCompact hook intercepts auto-compaction and triggers handoff"
 echo "  • Snapshots saved to ~/.claude/handoffs/{repo-name}/ — outside the repo, never committable"
 echo "  • latest.md always available for quick access"
 echo "  • Snapshot content stays out of chat — one-line confirmation only"

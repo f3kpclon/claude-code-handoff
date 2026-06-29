@@ -49,6 +49,7 @@ HOME="$FAKE_HOME" bash "$SCRIPT_DIR/install.sh" > /dev/null 2>&1 || true
 [ -f "$FAKE_HOME/.claude/hooks/handoff-monitor.sh" ]     && pass "handoff-monitor.sh installed"  || fail "handoff-monitor.sh missing"
 [ -f "$FAKE_HOME/.claude/hooks/handoff-inject.sh" ]      && pass "handoff-inject.sh installed"   || fail "handoff-inject.sh missing"
 [ -f "$FAKE_HOME/.claude/hooks/statusline-context.sh" ]  && pass "statusline-context.sh installed" || fail "statusline-context.sh missing"
+[ -f "$FAKE_HOME/.claude/hooks/pre-compact.sh" ]         && pass "pre-compact.sh installed"       || fail "pre-compact.sh missing"
 [ -x "$FAKE_HOME/.claude/hooks/handoff-monitor.sh" ]     && pass "hooks are executable"          || fail "hooks not executable"
 [ -f "$FAKE_HOME/.claude/settings.json" ]                && pass "settings.json created"         || fail "settings.json missing"
 
@@ -57,6 +58,8 @@ grep -q "handoff-monitor.sh" "$FAKE_HOME/.claude/settings.json" \
                                                           && pass "Stop hook registered"          || fail "Stop hook not in settings.json"
 grep -q "handoff-inject.sh"  "$FAKE_HOME/.claude/settings.json" \
                                                           && pass "UserPromptSubmit hook registered" || fail "UserPromptSubmit hook not in settings.json"
+grep -q "pre-compact.sh"     "$FAKE_HOME/.claude/settings.json" \
+                                                          && pass "PreCompact hook registered"      || fail "PreCompact hook not in settings.json"
 
 # install must be idempotent — run twice, no duplicates
 HOME="$FAKE_HOME" bash "$SCRIPT_DIR/install.sh" > /dev/null 2>&1 || true

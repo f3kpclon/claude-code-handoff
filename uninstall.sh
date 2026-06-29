@@ -8,7 +8,7 @@ echo "Uninstalling Claude Code Handoff..."
 echo ""
 
 # ── Remove hooks ─────────────────────────────────────────────────────────────
-for f in handoff-monitor.sh handoff-inject.sh statusline-context.sh; do
+for f in handoff-monitor.sh handoff-inject.sh statusline-context.sh pre-compact.sh; do
   if [ -f "$CLAUDE_DIR/hooks/$f" ]; then
     rm "$CLAUDE_DIR/hooks/$f"
     echo "✓ removed hooks/$f"
@@ -47,6 +47,7 @@ hooks = settings.get('hooks', {})
 for event, cmd in [
     ('UserPromptSubmit', 'bash ~/.claude/hooks/handoff-inject.sh'),
     ('Stop',             'bash ~/.claude/hooks/handoff-monitor.sh'),
+    ('PreCompact',       'bash ~/.claude/hooks/pre-compact.sh'),
 ]:
     entries = hooks.get(event, [])
     filtered = [e for e in entries if not any(h.get('command') == cmd for h in e.get('hooks', []))]
