@@ -143,17 +143,51 @@ for event, cmd in [
 path.write_text(json.dumps(settings, indent=2) + '\n')
 PYEOF
 
+# ── Hook verification ────────────────────────────────────────────────────────
+echo ""
+echo "Verifying hook registration..."
+python3 - "$SETTINGS" <<'PYEOF'
+import json, sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+settings = json.loads(path.read_text()) if path.exists() else {}
+hooks = settings.get('hooks', {})
+
+checks = [
+    ('UserPromptSubmit', 'bash ~/.claude/hooks/handoff-inject.sh'),
+    ('Stop',             'bash ~/.claude/hooks/handoff-monitor.sh'),
+    ('PreCompact',       'bash ~/.claude/hooks/pre-compact.sh'),
+]
+
+all_ok = True
+for event, cmd in checks:
+    entries = hooks.get(event, [])
+    found = any(h.get('command') == cmd for e in entries for h in e.get('hooks', []))
+    status = '✓' if found else '✗ MISSING'
+    print(f"  {status}  {event} → {cmd.split('/')[-1]}")
+    if not found:
+        all_ok = False
+
+if not all_ok:
+    print("")
+    print("  Some hooks are missing. Another tool may have modified settings.json.")
+    print("  Run 'bash install.sh' again to re-register them.")
+    sys.exit(1)
+PYEOF
+
 echo ""
 echo "Done. Restart Claude Code to activate."
 echo ""
 echo "What to expect:"
 echo "  • Status bar shows context usage on every response"
 echo "  • At 70/80/90% a dialog asks to generate a snapshot"
-echo "  • At context limit a PreCompact hook intercepts auto-compaction and triggers handoff"
+echo "  • At context limit PreCompact saves a snapshot and allows compaction to continue"
 echo "  • Snapshots saved to ~/.claude/handoffs/{repo-name}/ — outside the repo, never committable"
 echo "  • latest.md always available for quick access"
 echo "  • Snapshot content stays out of chat — one-line confirmation only"
 echo "  • Paste any snapshot at the start of a new session to resume"
 echo ""
+echo "Re-install is safe to run at any time — use it to repair hooks after other tools modify settings.json."
 echo "Manual trigger anytime: type '/handoff' or 'pausa sesión'"
 echo "Uninstall: bash uninstall.sh"

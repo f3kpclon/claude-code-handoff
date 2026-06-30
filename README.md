@@ -30,6 +30,8 @@ Bash writes to disk → ~/.claude/handoffs/{repo-name}/YYYY-MM-DD_HHmm.md + late
                       stored outside the repo — never committable by design
                       snapshot copied to clipboard
 Claude confirms     → "💾 listo mi shan!! guarda'o el handoff" printed in chat
+At context limit    → PreCompact hook saves a mini-snapshot automatically (bash-only, no Claude needed)
+                      compaction proceeds — session continues unblocked
 New session         → paste snapshot → Claude confirms and resumes
 ```
 
@@ -164,6 +166,25 @@ Every pull request runs three automated checks via GitHub Actions:
 | Security scan | Detects dangerous patterns in `hooks/`, `install.sh`, and `commands/` — outbound network calls, base64 decode, raw TCP, netcat, dynamic `exec` |
 
 **Branch protection** is active on this repo: all three checks must pass before any PR can merge, and direct pushes to `main` are restricted to the codeowner. For forks, enable it manually in GitHub → Settings → Branches.
+
+## Repair
+
+If another tool modifies `~/.claude/settings.json` after installation (e.g. `codebase-indexer install`), it may overwrite the hooks registered by handoff. Re-running install is safe and re-registers any missing hooks without duplicating existing ones:
+
+```bash
+bash install.sh
+```
+
+The installer prints a verification table at the end showing which hooks are registered:
+
+```
+Verifying hook registration...
+  ✓  UserPromptSubmit → handoff-inject.sh
+  ✓  Stop             → handoff-monitor.sh
+  ✓  PreCompact       → pre-compact.sh
+```
+
+If any show `✗ MISSING`, run `bash install.sh` again to fix them.
 
 ## Uninstall
 
