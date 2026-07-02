@@ -32,26 +32,25 @@ jobs:
       - uses: actions/checkout@v4
       - name: Scan for dangerous patterns
         run: |
-          SENSITIVE_FILES=$(find hooks/ install.sh uninstall.sh commands/ -type f 2>/dev/null)
+          SENSITIVE_FILES=$(find hooks/ skills/ install.sh uninstall.sh -type f 2>/dev/null)
           FOUND=0
 
           scan() {
             local pattern="$1"
             local label="$2"
-            # grep -n prints file:line:match; we exclude known-safe existing lines
             while IFS= read -r hit; do
               echo "⚠ $label → $hit"
               FOUND=$((FOUND+1))
-            done < <(grep -rn "$pattern" $SENSITIVE_FILES 2>/dev/null \
-              | grep -v 'handoff-monitor.sh:41:' )   # known eval for DIALOG_MSG expansion
+            done < <(grep -rnE "$pattern" $SENSITIVE_FILES 2>/dev/null)
           }
 
-          scan 'curl '          'outbound curl'
-          scan 'wget '          'outbound wget'
-          scan 'base64 -d'      'base64 decode (payload obfuscation)'
-          scan '/dev/tcp'       'raw TCP connection'
-          scan 'nc '            'netcat'
-          scan 'python3 -c.*exec' 'dynamic python exec'
+          scan 'curl '                 'outbound curl'
+          scan 'wget '                 'outbound wget'
+          scan 'base64 -d'             'base64 decode (payload obfuscation)'
+          scan '/dev/tcp'              'raw TCP connection'
+          scan '(^|[^[:alnum:]])nc '   'netcat'
+          scan 'python3 -c.*exec'      'dynamic python exec'
+          scan '(^|[^[:alnum:]])eval ' 'dynamic eval'
 
           if [ "$FOUND" -gt 0 ]; then
             echo ""

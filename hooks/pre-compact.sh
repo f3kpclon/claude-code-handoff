@@ -28,7 +28,7 @@ fi
 
 # Degraded mini-snapshot: bash can't compose session content — only the fields
 # derivable from git/fs. Section layout mirrors skills/handoff-protocol/SKILL.md;
-# keep both in sync when changing the format.
+# update both together when changing the format.
 cat > "$HDIR/$TS.md" << HANDOFF_END
 # Handoff Snapshot
 **Fecha:** $DATE

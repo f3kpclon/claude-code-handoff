@@ -95,7 +95,7 @@ echo "4. pre-compact.sh save-and-allow"
 FAKE_HOME=$(mktemp -d)
 FAKE_REPO=$(mktemp -d)
 git -C "$FAKE_REPO" init -q 2>/dev/null
-git -C "$FAKE_REPO" commit --allow-empty -m "init" 2>/dev/null || true
+git -C "$FAKE_REPO" commit --allow-empty -m "init" > /dev/null 2>&1 || true
 
 INPUT=$(python3 -c "import json; print(json.dumps({'cwd': '$FAKE_REPO'}))")
 OUTPUT=$(echo "$INPUT" | HOME="$FAKE_HOME" bash "$SCRIPT_DIR/hooks/pre-compact.sh" 2>/dev/null)
@@ -186,6 +186,74 @@ grep -q "statusline-context.sh" "$FAKE_HOME/.claude/settings.json" \
   && pass "statusline replaced after force flag"          || fail "statusline not replaced with force flag"
 
 rm -rf "$FAKE_HOME"
+
+# ── Test 7: handoff-monitor.sh thresholds & sentinels ────────────────────────
+echo "7. handoff-monitor.sh thresholds"
+
+FAKE_HOME=$(mktemp -d)
+FAKE_BIN=$(mktemp -d)
+SID="handofftest$$"
+mkdir -p "$FAKE_HOME/.claude/ctx"
+rm -f "/tmp/handoff_w70_$SID" "/tmp/handoff_w80_$SID" "/tmp/handoff_w90_$SID"
+
+# Fake dialog binaries so no real dialog pops on any platform:
+# darwin branch calls osascript, linux branch calls zenity.
+make_dialogs() {  # $1 = Yes|No
+  if [ "$1" = "Yes" ]; then
+    printf '#!/usr/bin/env bash\necho "Yes"\n' > "$FAKE_BIN/osascript"
+    printf '#!/usr/bin/env bash\nexit 0\n'     > "$FAKE_BIN/zenity"
+  else
+    printf '#!/usr/bin/env bash\necho "No"\n'  > "$FAKE_BIN/osascript"
+    printf '#!/usr/bin/env bash\nexit 1\n'     > "$FAKE_BIN/zenity"
+  fi
+  chmod +x "$FAKE_BIN/osascript" "$FAKE_BIN/zenity"
+}
+
+INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID" "$PWD")
+run_monitor() {
+  echo "$INPUT" | HOME="$FAKE_HOME" PATH="$FAKE_BIN:$PATH" bash "$SCRIPT_DIR/hooks/handoff-monitor.sh" 2>/dev/null
+}
+
+make_dialogs Yes
+
+echo "50" > "$FAKE_HOME/.claude/ctx/$SID.pct"
+OUT=$(run_monitor)
+[ -z "$OUT" ] && pass "below threshold → silence" || fail "output below threshold: $OUT"
+
+echo "72" > "$FAKE_HOME/.claude/ctx/$SID.pct"
+OUT=$(run_monitor)
+echo "$OUT" | grep -q "HANDOFF REQUESTED" \
+  && pass "70% + Yes → block with HANDOFF REQUESTED" || fail "no block at 70%: $OUT"
+
+OUT=$(run_monitor)
+[ -z "$OUT" ] && pass "70% alert consumed — no repeat" || fail "alert repeated at same level: $OUT"
+
+echo "85" > "$FAKE_HOME/.claude/ctx/$SID.pct"
+OUT=$(run_monitor)
+echo "$OUT" | grep -q "HANDOFF REQUESTED" \
+  && pass "next threshold (80%) fires again" || fail "80% threshold did not fire: $OUT"
+
+make_dialogs No
+echo "95" > "$FAKE_HOME/.claude/ctx/$SID.pct"
+OUT=$(run_monitor)
+[ -z "$OUT" ] && pass "90% + No → no block" || fail "block emitted after No: $OUT"
+
+make_dialogs Yes
+OUT=$(run_monitor)
+[ -z "$OUT" ] && pass "No consumed the 90% alert" || fail "90% alert re-fired after No: $OUT"
+
+# per-session pct: another session's percentage must not trigger this session
+SID2="handofftest2$$"
+rm -f "/tmp/handoff_w70_$SID2" "/tmp/handoff_w80_$SID2" "/tmp/handoff_w90_$SID2"
+echo "10" > "$FAKE_HOME/.claude/ctx/$SID2.pct"
+echo "99" > "$FAKE_HOME/.claude/ctx/$SID.pct"
+INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID2" "$PWD")
+OUT=$(run_monitor)
+[ -z "$OUT" ] && pass "session reads its own pct (no cross-session trigger)" || fail "cross-session pct leak: $OUT"
+
+rm -f /tmp/handoff_w70_"$SID"* /tmp/handoff_w80_"$SID"* /tmp/handoff_w90_"$SID"* \
+      "/tmp/handoff_w70_$SID2" "/tmp/handoff_w80_$SID2" "/tmp/handoff_w90_$SID2"
+rm -rf "$FAKE_HOME" "$FAKE_BIN"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
