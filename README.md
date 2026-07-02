@@ -17,7 +17,7 @@ cd claude-code-handoff
 bash install.sh
 ```
 
-Copies hooks, command, and skills to `~/.claude/`, registers them in `settings.json`, and appends the handoff protocol to `CLAUDE.md`. Restart Claude Code after installing.
+Copies hooks and skills to `~/.claude/`, registers them in `settings.json`, and appends the handoff protocol to `CLAUDE.md`. The `handoff` skill doubles as the `/handoff` slash command. Restart Claude Code after installing.
 
 ## How it works
 
@@ -145,10 +145,12 @@ To change after installing, edit the `# ── CUSTOMIZE` block in each file und
 | Context thresholds | `hooks/handoff-monitor.sh` | `THRESHOLDS` |
 | Dialog title | `hooks/handoff-monitor.sh` | `DIALOG_TITLE` |
 | Dialog message | `hooks/handoff-monitor.sh` | `DIALOG_MSG` |
-| Confirmation message | `commands/handoff.md` | line starting with `💾` |
+| Confirmation message | `skills/handoff/SKILL.md` | line starting with `💾` |
 | Contexto bar emoji + text | `hooks/statusline-context.sh` | `L90_DOT`, `L90_MSG`, etc. |
 | Hourly quota emoji + text | `hooks/statusline-context.sh` | `RH90_DOT`, `RH90_MSG`, etc. |
 | Weekly quota emoji + text | `hooks/statusline-context.sh` | `RS90_DOT`, `RS90_MSG`, etc. |
+
+Note: `THRESHOLDS` controls when the **dialog** fires; the statusline emoji bands (30/50/60/70/80/90) are display-only and independent — changing one does not change the other.
 
 ## Test
 
@@ -208,9 +210,8 @@ Removes all hooks, the `/handoff` command, skills, and surgically cleans `settin
 | File | Role |
 |------|------|
 | `CLAUDE.md` | Handoff protocol — triggers and resume behavior for Claude |
-| `commands/handoff.md` | `/handoff` slash command — composes snapshot silently, writes to disk via Bash, prints one-line confirmation |
-| `skills/handoff/SKILL.md` | Handoff skill — same logic as the command, invoked by Claude when CLAUDE.md auto-triggers |
-| `skills/handoff-protocol/SKILL.md` | Snapshot format template — loaded by the handoff skill when composing the snapshot |
+| `skills/handoff/SKILL.md` | The `/handoff` command and auto-invoked skill — composes snapshot silently, writes to disk via Bash, prints one-line confirmation |
+| `skills/handoff-protocol/SKILL.md` | Snapshot format template — single source of truth, loaded by the handoff skill when composing |
 | `hooks/statusline-context.sh` | Renders the context progress bar in the status line |
 | `hooks/handoff-monitor.sh` | Fires after each response — shows dialog at thresholds |
 | `hooks/pre-compact.sh` | Saves a bash-only mini-snapshot before auto-compaction |

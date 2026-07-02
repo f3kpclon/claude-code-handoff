@@ -48,12 +48,14 @@ SKILLS_DIR="$CLAUDE_DIR/skills"
 mkdir -p "$COMMANDS_DIR" "$HOOKS_DIR" "$SKILLS_DIR/handoff" "$SKILLS_DIR/handoff-protocol"
 
 # ── Files ────────────────────────────────────────────────────────────────────
-cp "$SCRIPT_DIR/commands/handoff.md"                        "$COMMANDS_DIR/handoff.md"
-echo "✓ /handoff command installed"
+# Skills ARE slash commands — skills/handoff creates /handoff. The separate
+# commands/handoff.md was removed in v0.3; drop it from old installs so it
+# doesn't shadow the skill.
+rm -f "$COMMANDS_DIR/handoff.md"
 
 cp "$SCRIPT_DIR/skills/handoff/SKILL.md"          "$SKILLS_DIR/handoff/SKILL.md"
 cp "$SCRIPT_DIR/skills/handoff-protocol/SKILL.md" "$SKILLS_DIR/handoff-protocol/SKILL.md"
-echo "✓ skills installed"
+echo "✓ skills installed (/handoff + handoff-protocol)"
 
 cp "$SCRIPT_DIR/hooks/statusline-context.sh"  "$HOOKS_DIR/statusline-context.sh"
 cp "$SCRIPT_DIR/hooks/handoff-monitor.sh"     "$HOOKS_DIR/handoff-monitor.sh"
@@ -63,7 +65,7 @@ rm -f "$HOOKS_DIR/handoff-inject.sh"  # removed in v0.3 — dead code from old a
 sed -i.bak "s/^THRESHOLDS=.*/THRESHOLDS=(${THRESHOLDS})/" "$HOOKS_DIR/handoff-monitor.sh" && rm -f "$HOOKS_DIR/handoff-monitor.sh.bak"
 sed -i.bak "s|^DIALOG_TITLE=.*|DIALOG_TITLE=\"${DIALOG_TITLE}\"|" "$HOOKS_DIR/handoff-monitor.sh" && rm -f "$HOOKS_DIR/handoff-monitor.sh.bak"
 sed -i.bak "s|^DIALOG_MSG=.*|DIALOG_MSG='${DIALOG_MSG}'|" "$HOOKS_DIR/handoff-monitor.sh" && rm -f "$HOOKS_DIR/handoff-monitor.sh.bak"
-sed -i.bak "s|^💾 .*|${CONFIRM_MSG}|" "$COMMANDS_DIR/handoff.md" && rm -f "$COMMANDS_DIR/handoff.md.bak"
+sed -i.bak "s|^💾 .*|${CONFIRM_MSG}|" "$SKILLS_DIR/handoff/SKILL.md" && rm -f "$SKILLS_DIR/handoff/SKILL.md.bak"
 chmod +x "$HOOKS_DIR/statusline-context.sh" "$HOOKS_DIR/handoff-monitor.sh" "$HOOKS_DIR/pre-compact.sh"
 echo "✓ hooks installed (thresholds: ${THRESHOLDS})"
 

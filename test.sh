@@ -43,9 +43,14 @@ rm -rf "$FAKE_REPO" "$FAKE_HOME"
 echo "2. install.sh file copies"
 
 FAKE_HOME=$(mktemp -d)
+# Simulate a pre-v0.3 install with the legacy command present
+mkdir -p "$FAKE_HOME/.claude/commands"
+touch "$FAKE_HOME/.claude/commands/handoff.md"
 HOME="$FAKE_HOME" bash "$SCRIPT_DIR/install.sh" > /dev/null 2>&1 || true
 
-[ -f "$FAKE_HOME/.claude/commands/handoff.md" ]          && pass "handoff.md installed"          || fail "handoff.md missing"
+[ -f "$FAKE_HOME/.claude/skills/handoff/SKILL.md" ]      && pass "handoff skill installed"       || fail "handoff skill missing"
+[ -f "$FAKE_HOME/.claude/skills/handoff-protocol/SKILL.md" ] && pass "handoff-protocol skill installed" || fail "handoff-protocol skill missing"
+[ ! -f "$FAKE_HOME/.claude/commands/handoff.md" ]        && pass "legacy command removed (skill is /handoff)" || fail "legacy commands/handoff.md still present"
 [ -f "$FAKE_HOME/.claude/hooks/handoff-monitor.sh" ]     && pass "handoff-monitor.sh installed"  || fail "handoff-monitor.sh missing"
 [ -f "$FAKE_HOME/.claude/hooks/statusline-context.sh" ]  && pass "statusline-context.sh installed" || fail "statusline-context.sh missing"
 [ -f "$FAKE_HOME/.claude/hooks/pre-compact.sh" ]         && pass "pre-compact.sh installed"       || fail "pre-compact.sh missing"
