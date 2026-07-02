@@ -37,7 +37,15 @@ FIVE_H=$(echo "$input"  | jq -r '.rate_limits.five_hour.used_percentage // empty
 SEVEN_D=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
 
 [ -z "$used" ] && exit 0
+# Legacy global file (kept for custom statuslines that integrate manually)
 echo "$used" > ~/.claude/ctx_pct.txt
+# Per-session file — concurrent sessions must not clobber each other's pct
+SID=$(echo "$input" | jq -r '.session_id // empty')
+if [ -n "$SID" ]; then
+    mkdir -p ~/.claude/ctx
+    echo "$used" > ~/.claude/ctx/"$SID".pct
+    find ~/.claude/ctx -name '*.pct' -mmin +1440 -delete 2>/dev/null
+fi
 pct_int=$(( ${used%.*} ))
 
 # ── Colors ────────────────────────────────────────────────────────────────────

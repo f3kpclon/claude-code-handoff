@@ -106,7 +106,9 @@ termina sesión   — save and close
 | Linux GNOME | `zenity` → `sudo apt install zenity` |
 | Linux KDE | `kdialog` → `sudo apt install kdialog` |
 | Windows (Git Bash / WSL) | PowerShell `MessageBox` (built-in) |
-| No dialog tool | Falls back to in-chat message |
+| No dialog tool | System message suggests typing `/handoff` — never forces a handoff |
+
+Clipboard copy uses the first tool available: `pbcopy` (macOS), `wl-copy` (Wayland), `xclip` (X11), `clip.exe` (Windows). Without any, the snapshot is still saved to disk.
 
 ## Resuming a session
 
@@ -199,7 +201,7 @@ echo "$used" > ~/.claude/ctx_pct.txt   # $used = .context_window.used_percentage
 bash uninstall.sh
 ```
 
-Removes all hooks, the `/handoff` command, skills, and cleans `settings.json`. Restores `settings.json.bak` if available. Snapshots in `~/.claude/handoffs/` are preserved.
+Removes all hooks, the `/handoff` command, skills, and surgically cleans `settings.json` (only the entries handoff added — your other settings and any foreign statusline are untouched). Snapshots in `~/.claude/handoffs/` are preserved.
 
 ## Files
 

@@ -29,11 +29,10 @@ for skill in handoff handoff-protocol; do
   fi
 done
 
-# ── Restore settings.json ─────────────────────────────────────────────────────
-if [ -f "${SETTINGS}.bak" ]; then
-  mv "${SETTINGS}.bak" "$SETTINGS"
-  echo "✓ settings.json restored from backup"
-elif [ -f "$SETTINGS" ]; then
+# ── Clean settings.json ──────────────────────────────────────────────────────
+# Surgical removal only — restoring an install-time .bak would wipe any
+# settings the user changed after installing.
+if [ -f "$SETTINGS" ]; then
   python3 - "$SETTINGS" <<'PYEOF'
 import json, sys
 from pathlib import Path
@@ -41,7 +40,9 @@ from pathlib import Path
 path = Path(sys.argv[1])
 settings = json.loads(path.read_text())
 
-settings.pop('statusLine', None)
+# Only remove the statusline if it's ours — never clobber a foreign one
+if 'statusline-context.sh' in settings.get('statusLine', {}).get('command', ''):
+    settings.pop('statusLine')
 
 hooks = settings.get('hooks', {})
 for event, cmd in [

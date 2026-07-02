@@ -53,7 +53,7 @@ cat > "$HDIR/$TS.md" << 'HANDOFF_END'
 [CONTENIDO REAL DEL SNAPSHOT — reemplazar esta línea con el texto completo]
 HANDOFF_END
 cp "$HDIR/$TS.md" "$HDIR/latest.md"
-cat "$HDIR/latest.md" | pbcopy 2>/dev/null || true
+(pbcopy || wl-copy || xclip -selection clipboard || clip.exe) < "$HDIR/latest.md" 2>/dev/null || true
 ```
 
 No muestres el contenido del snapshot en el chat. Cuando el Bash termine, responde únicamente con esta línea (nada más):

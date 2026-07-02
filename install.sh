@@ -107,11 +107,6 @@ fi
 # ── settings.json ────────────────────────────────────────────────────────────
 SETTINGS="$CLAUDE_DIR/settings.json"
 
-# Backup before modifying
-if [ -f "$SETTINGS" ]; then
-  cp "$SETTINGS" "${SETTINGS}.bak"
-fi
-
 python3 - "$SETTINGS" <<'PYEOF'
 import json, sys
 from pathlib import Path
