@@ -32,6 +32,7 @@ Bash writes to disk → ~/.claude/handoffs/{repo-name}/YYYY-MM-DD_HHmm.md + late
 Claude confirms     → "💾 listo mi shan!! guarda'o el handoff" printed in chat
 At context limit    → PreCompact hook saves a mini-snapshot automatically (bash-only, no Claude needed)
                       compaction proceeds — session continues unblocked
+                      a system message tells you where the snapshot was saved
 New session         → paste snapshot → Claude confirms and resumes
 ```
 
@@ -153,7 +154,7 @@ To change after installing, edit the `# ── CUSTOMIZE` block in each file und
 bash test.sh
 ```
 
-Verifies snapshot save logic, install idempotency, and sentinel behavior. 17 assertions.
+Verifies snapshot save logic, install idempotency, PreCompact behavior, and statusline safety. 27 assertions.
 
 ## Security
 
@@ -179,12 +180,18 @@ The installer prints a verification table at the end showing which hooks are reg
 
 ```
 Verifying hook registration...
-  ✓  UserPromptSubmit → handoff-inject.sh
   ✓  Stop             → handoff-monitor.sh
   ✓  PreCompact       → pre-compact.sh
+  ✓  statusLine       → statusline-context.sh
 ```
 
 If any show `✗ MISSING`, run `bash install.sh` again to fix them.
+
+**Already have a statusline?** The threshold dialogs depend on the context percentage that only `statusline-context.sh` writes. If a different statusline is configured, the installer fails loudly instead of leaving a dead alert system. Either replace yours (`HANDOFF_FORCE_STATUSLINE=1 bash install.sh`) or add one line to your own statusline script:
+
+```bash
+echo "$used" > ~/.claude/ctx_pct.txt   # $used = .context_window.used_percentage from stdin JSON
+```
 
 ## Uninstall
 
@@ -204,7 +211,7 @@ Removes all hooks, the `/handoff` command, skills, and cleans `settings.json`. R
 | `skills/handoff-protocol/SKILL.md` | Snapshot format template — loaded by the handoff skill when composing the snapshot |
 | `hooks/statusline-context.sh` | Renders the context progress bar in the status line |
 | `hooks/handoff-monitor.sh` | Fires after each response — shows dialog at thresholds |
-| `hooks/handoff-inject.sh` | Injects handoff context on the next user message after dialog |
-| `test.sh` | 17 assertions — snapshot logic, install idempotency, sentinel behavior |
+| `hooks/pre-compact.sh` | Saves a bash-only mini-snapshot before auto-compaction |
+| `test.sh` | 27 assertions — snapshot logic, install idempotency, PreCompact, statusline safety |
 | `install.sh` | Installs everything into `~/.claude/` |
 | `uninstall.sh` | Removes everything installed |

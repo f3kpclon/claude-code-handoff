@@ -57,14 +57,14 @@ echo "✓ skills installed"
 
 cp "$SCRIPT_DIR/hooks/statusline-context.sh"  "$HOOKS_DIR/statusline-context.sh"
 cp "$SCRIPT_DIR/hooks/handoff-monitor.sh"     "$HOOKS_DIR/handoff-monitor.sh"
-cp "$SCRIPT_DIR/hooks/handoff-inject.sh"      "$HOOKS_DIR/handoff-inject.sh"
 cp "$SCRIPT_DIR/hooks/pre-compact.sh"         "$HOOKS_DIR/pre-compact.sh"
+rm -f "$HOOKS_DIR/handoff-inject.sh"  # removed in v0.3 — dead code from old architecture
 # Inject CUSTOMIZE values into installed files
 sed -i.bak "s/^THRESHOLDS=.*/THRESHOLDS=(${THRESHOLDS})/" "$HOOKS_DIR/handoff-monitor.sh" && rm -f "$HOOKS_DIR/handoff-monitor.sh.bak"
 sed -i.bak "s|^DIALOG_TITLE=.*|DIALOG_TITLE=\"${DIALOG_TITLE}\"|" "$HOOKS_DIR/handoff-monitor.sh" && rm -f "$HOOKS_DIR/handoff-monitor.sh.bak"
 sed -i.bak "s|^DIALOG_MSG=.*|DIALOG_MSG='${DIALOG_MSG}'|" "$HOOKS_DIR/handoff-monitor.sh" && rm -f "$HOOKS_DIR/handoff-monitor.sh.bak"
 sed -i.bak "s|^💾 .*|${CONFIRM_MSG}|" "$COMMANDS_DIR/handoff.md" && rm -f "$COMMANDS_DIR/handoff.md.bak"
-chmod +x "$HOOKS_DIR/statusline-context.sh" "$HOOKS_DIR/handoff-monitor.sh" "$HOOKS_DIR/handoff-inject.sh" "$HOOKS_DIR/pre-compact.sh"
+chmod +x "$HOOKS_DIR/statusline-context.sh" "$HOOKS_DIR/handoff-monitor.sh" "$HOOKS_DIR/pre-compact.sh"
 echo "✓ hooks installed (thresholds: ${THRESHOLDS})"
 
 # ── CLAUDE.md — append or upgrade protocol ───────────────────────────────────
@@ -119,18 +119,39 @@ from pathlib import Path
 path = Path(sys.argv[1])
 settings = json.loads(path.read_text()) if path.exists() else {}
 
-if 'statusLine' not in settings:
+# statusLine: handoff-monitor depends on ctx_pct written by OUR statusline.
+# A foreign statusline means threshold alerts silently never fire — refuse to
+# pretend the install worked in that case (verification below reports it).
+OURS = 'statusline-context.sh'
+sl = settings.get('statusLine')
+if sl is None:
     settings['statusLine'] = {"type": "command", "command": "bash ~/.claude/hooks/statusline-context.sh"}
     print("✓ statusLine configured")
+elif OURS in sl.get('command', ''):
+    print("✓ statusLine — already ours, skipped")
+elif __import__('os').environ.get('HANDOFF_FORCE_STATUSLINE') == '1':
+    settings['statusLine'] = {"type": "command", "command": "bash ~/.claude/hooks/statusline-context.sh"}
+    print("✓ statusLine replaced (HANDOFF_FORCE_STATUSLINE=1)")
 else:
-    print("✓ statusLine — already present, skipped")
+    print("⚠ statusLine — a different statusline is configured; NOT replaced")
 
 hooks = settings.setdefault('hooks', {})
 
+# Drop stale registrations from pre-v0.3 installs (handoff-inject.sh removed)
+STALE = 'bash ~/.claude/hooks/handoff-inject.sh'
+for event in list(hooks):
+    pruned = [e for e in hooks[event]
+              if not any(h.get('command') == STALE for h in e.get('hooks', []))]
+    if len(pruned) != len(hooks[event]):
+        print(f"✓ {event} — stale handoff-inject.sh registration removed")
+    if pruned:
+        hooks[event] = pruned
+    else:
+        del hooks[event]
+
 for event, cmd in [
-    ('UserPromptSubmit', 'bash ~/.claude/hooks/handoff-inject.sh'),
-    ('Stop',             'bash ~/.claude/hooks/handoff-monitor.sh'),
-    ('PreCompact',       'bash ~/.claude/hooks/pre-compact.sh'),
+    ('Stop',       'bash ~/.claude/hooks/handoff-monitor.sh'),
+    ('PreCompact', 'bash ~/.claude/hooks/pre-compact.sh'),
 ]:
     entries = hooks.setdefault(event, [])
     exists = any(h.get('command') == cmd for e in entries for h in e.get('hooks', []))
@@ -155,9 +176,8 @@ settings = json.loads(path.read_text()) if path.exists() else {}
 hooks = settings.get('hooks', {})
 
 checks = [
-    ('UserPromptSubmit', 'bash ~/.claude/hooks/handoff-inject.sh'),
-    ('Stop',             'bash ~/.claude/hooks/handoff-monitor.sh'),
-    ('PreCompact',       'bash ~/.claude/hooks/pre-compact.sh'),
+    ('Stop',       'bash ~/.claude/hooks/handoff-monitor.sh'),
+    ('PreCompact', 'bash ~/.claude/hooks/pre-compact.sh'),
 ]
 
 all_ok = True
@@ -169,10 +189,24 @@ for event, cmd in checks:
     if not found:
         all_ok = False
 
+# statusLine is load-bearing: without our script, ctx_pct is never written and
+# the Stop hook exits silently on every response — the alert system is dead.
+sl_cmd = settings.get('statusLine', {}).get('command', '')
+if 'statusline-context.sh' in sl_cmd:
+    print("  ✓  statusLine        → statusline-context.sh")
+else:
+    all_ok = False
+    print("  ✗  statusLine        → NOT ours — threshold alerts will NEVER fire")
+    print("")
+    print("  handoff-monitor.sh reads the context %% that only our statusline writes.")
+    print("  Fix one of two ways:")
+    print("    1. Replace your statusline:  HANDOFF_FORCE_STATUSLINE=1 bash install.sh")
+    print("    2. Keep yours, but add this line to your statusline script:")
+    print("       echo \"$used\" > ~/.claude/ctx_pct.txt   # $used = context used_percentage")
+
 if not all_ok:
     print("")
-    print("  Some hooks are missing. Another tool may have modified settings.json.")
-    print("  Run 'bash install.sh' again to re-register them.")
+    print("  Run 'bash install.sh' again after fixing the above.")
     sys.exit(1)
 PYEOF
 

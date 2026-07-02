@@ -1,7 +1,6 @@
 ---
 name: handoff
 description: Genera el snapshot de la sesión actual para retomar en la próxima sesión sin perder contexto. Invocar antes de cerrar o cuando el contexto se acerca al límite.
-disable-model-invocation: true
 model: claude-haiku-4-5-20251001
 allowed-tools: Bash
 ---

@@ -63,9 +63,11 @@ HANDOFF_END
 
 cp "$HDIR/$TS.md" "$HDIR/latest.md"
 
-# Notify Claude post-compaction that a snapshot was auto-saved
+# Notify the user that a snapshot was auto-saved.
+# PreCompact does NOT support additionalContext — systemMessage is the only
+# supported channel (shown to the user; compaction proceeds).
 python3 -c "
-import json, sys
-msg = 'Auto-handoff guardado en $HDIR/latest.md — la sesión fue compactada por límite de contexto. Informa al usuario que puede retomar con: cat $HDIR/latest.md'
-print(json.dumps({'additionalContext': msg}))
+import json
+msg = '💾 Auto-handoff guardado en $HDIR/latest.md — retoma con: cat $HDIR/latest.md'
+print(json.dumps({'systemMessage': msg}))
 "
