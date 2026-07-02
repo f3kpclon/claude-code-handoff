@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2001  # sed adds a prefix to multi-line vars inside the heredoc
 # pre-compact.sh — PreCompact hook: save mini-snapshot to disk, then allow compaction.
 #
 # Does NOT block — blocking when context is full leaves Claude unable to act.

@@ -2,6 +2,7 @@
 # ── CUSTOMIZE ────────────────────────────────────────────────────────────────
 THRESHOLDS=(70 80 90)
 DIALOG_TITLE="Claude Code — Handoff"
+# shellcheck disable=SC2016  # ${PCT_INT} is a template token, substituted below
 DIALOG_MSG='Context at ${PCT_INT}% — generate handoff snapshot to continue in a new session?'
 # ─────────────────────────────────────────────────────────────────────────────
 INPUT=$(cat)
