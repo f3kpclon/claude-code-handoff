@@ -11,7 +11,7 @@ jobs:
     name: ShellCheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # v2.0.0
         with:
           scandir: '.'
@@ -21,7 +21,7 @@ jobs:
     name: Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Run test suite
         run: bash test.sh
 
@@ -29,7 +29,7 @@ jobs:
     name: Security Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Scan for dangerous patterns
         run: |
           # Includes test.sh: CI runs `bash test.sh`, so a payload there executes
