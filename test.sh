@@ -289,6 +289,7 @@ bash -n "$MON" 2>/dev/null \
 grep -qF 'Pipe|And&Amp' "$MON" \
   && pass "special-char title survived injection intact"     || fail "title mangled by injection"
 # ${PCT_INT} template token must stay literal (shlex single-quotes, no expansion)
+# shellcheck disable=SC2016  # the single-quoted literal is exactly what we grep for
 grep -qF '${PCT_INT}' "$MON" \
   && pass "\${PCT_INT} template token preserved literally"    || fail "\${PCT_INT} token lost during injection"
 
