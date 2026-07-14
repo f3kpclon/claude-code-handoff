@@ -15,6 +15,13 @@ for f in handoff-monitor.sh handoff-inject.sh statusline-context.sh pre-compact.
   fi
 done
 
+# ── Remove per-session state (pct + threshold sentinels, moved here from /tmp) ─
+if [ -d "$CLAUDE_DIR/ctx" ]; then
+  rm -rf "$CLAUDE_DIR/ctx"
+  echo "✓ removed ctx/ (per-session state)"
+fi
+rm -f "$CLAUDE_DIR/ctx_pct.txt"
+
 # ── Remove command ────────────────────────────────────────────────────────────
 if [ -f "$CLAUDE_DIR/commands/handoff.md" ]; then
   rm "$CLAUDE_DIR/commands/handoff.md"

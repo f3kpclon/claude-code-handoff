@@ -194,6 +194,8 @@ FAKE_HOME=$(mktemp -d)
 FAKE_BIN=$(mktemp -d)
 SID="handofftest$$"
 mkdir -p "$FAKE_HOME/.claude/ctx"
+# Sentinels now live in $HOME/.claude/ctx (not /tmp) — FAKE_HOME is fresh, so no
+# cross-run contamination. Clear any legacy /tmp leftovers from older versions.
 rm -f "/tmp/handoff_w70_$SID" "/tmp/handoff_w80_$SID" "/tmp/handoff_w90_$SID"
 
 # Fake dialog binaries so no real dialog pops on any platform:
@@ -225,6 +227,12 @@ OUT=$(run_monitor)
 echo "$OUT" | grep -q "HANDOFF REQUESTED" \
   && pass "70% + Yes → block with HANDOFF REQUESTED" || fail "no block at 70%: $OUT"
 
+# Sentinel written under ~/.claude/ctx (owned, not world-writable) — NOT /tmp
+[ -f "$FAKE_HOME/.claude/ctx/handoff_w70_$SID" ] \
+  && pass "sentinel in ~/.claude/ctx (not /tmp)" || fail "sentinel not in ctx dir"
+[ ! -f "/tmp/handoff_w70_$SID" ] \
+  && pass "no sentinel leaked to /tmp"           || fail "sentinel still written to /tmp"
+
 OUT=$(run_monitor)
 [ -z "$OUT" ] && pass "70% alert consumed — no repeat" || fail "alert repeated at same level: $OUT"
 
@@ -254,6 +262,39 @@ OUT=$(run_monitor)
 rm -f /tmp/handoff_w70_"$SID"* /tmp/handoff_w80_"$SID"* /tmp/handoff_w90_"$SID"* \
       "/tmp/handoff_w70_$SID2" "/tmp/handoff_w80_$SID2" "/tmp/handoff_w90_$SID2"
 rm -rf "$FAKE_HOME" "$FAKE_BIN"
+
+# ── Test 8: CUSTOMIZE injection robustness (sed→python3) ─────────────────────
+echo "8. install.sh CUSTOMIZE injection robustness"
+
+FAKE_HOME=$(mktemp -d)
+# Must live inside the repo: install.sh resolves siblings (VERSION, skills/,
+# hooks/) via BASH_SOURCE, so a copy in /tmp can't find them.
+NASTY_INSTALL="$SCRIPT_DIR/.install.nasty.$$.sh"
+# Adversarial title: | is sed's s|...| delimiter and & means "the matched text"
+# in a sed replacement — both would corrupt the old sed-based injection.
+python3 - "$SCRIPT_DIR/install.sh" "$NASTY_INSTALL" <<'PYEOF'
+import sys
+from pathlib import Path
+src, dst = Path(sys.argv[1]), Path(sys.argv[2])
+t = src.read_text().replace(
+    'DIALOG_TITLE="Claude Code — Handoff"',
+    'DIALOG_TITLE="Pipe|And&Amp"')
+dst.write_text(t)
+PYEOF
+HOME="$FAKE_HOME" bash "$NASTY_INSTALL" > /dev/null 2>&1 || true
+MON="$FAKE_HOME/.claude/hooks/handoff-monitor.sh"
+
+bash -n "$MON" 2>/dev/null \
+  && pass "installed monitor is valid bash with |& in title" || fail "nasty CUSTOMIZE corrupted the installed script"
+grep -qF 'Pipe|And&Amp' "$MON" \
+  && pass "special-char title survived injection intact"     || fail "title mangled by injection"
+# ${PCT_INT} template token must stay literal (shlex single-quotes, no expansion)
+# shellcheck disable=SC2016  # the single-quoted literal is exactly what we grep for
+grep -qF '${PCT_INT}' "$MON" \
+  && pass "\${PCT_INT} template token preserved literally"    || fail "\${PCT_INT} token lost during injection"
+
+rm -f "$NASTY_INSTALL"
+rm -rf "$FAKE_HOME"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

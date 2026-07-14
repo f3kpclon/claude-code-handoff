@@ -15,6 +15,12 @@ print(sid)
 " 2>/dev/null)
 [ -z "$SESSION" ] && exit 0
 
+# Per-user sentinel dir — NOT /tmp. A predictable /tmp/handoff_wNN_<sid> path is
+# world-writable: another local user could pre-create it (suppress alerts) or
+# point it at a symlink. ~/.claude/ is owned by us and already holds ctx state.
+SENTINEL_DIR="$HOME/.claude/ctx"
+mkdir -p "$SENTINEL_DIR"
+
 # ── Context percentage — per-session file first, legacy global as fallback ──
 PCT=$(cat "$HOME/.claude/ctx/${SESSION}.pct" 2>/dev/null)
 [ -z "$PCT" ] && PCT=$(cat "$HOME/.claude/ctx_pct.txt" 2>/dev/null)
@@ -23,7 +29,7 @@ PCT_INT=$(( ${PCT%.*} ))
 
 THRESHOLD=0
 for LEVEL in "${THRESHOLDS[@]}"; do
-  if [ "$PCT_INT" -ge "$LEVEL" ] && [ ! -f "/tmp/handoff_w${LEVEL}_${SESSION}" ]; then
+  if [ "$PCT_INT" -ge "$LEVEL" ] && [ ! -f "$SENTINEL_DIR/handoff_w${LEVEL}_${SESSION}" ]; then
     THRESHOLD=$LEVEL
     break
   fi
@@ -36,7 +42,7 @@ MSG="${DIALOG_MSG//\$\{PCT_INT\}/$PCT_INT}"
 # Headless fallback: no dialog available — suggest /handoff via systemMessage
 # instead of forcing a handoff the user never approved.
 suggest_handoff() {
-  touch "/tmp/handoff_w${THRESHOLD}_${SESSION}"
+  touch "$SENTINEL_DIR/handoff_w${THRESHOLD}_${SESSION}"
   python3 -c "
 import json
 print(json.dumps({'systemMessage': '🧠 Contexto al ${PCT_INT}% — escribe /handoff para guardar un snapshot y retomar en una sesión nueva.'}))
@@ -81,7 +87,7 @@ esac
 # Consume the alert only once the user actually answered — if the hook was
 # killed (timeout, closed terminal), the alert fires again on the next Stop.
 [ -z "$ANSWER" ] && exit 0
-touch "/tmp/handoff_w${THRESHOLD}_${SESSION}"
+touch "$SENTINEL_DIR/handoff_w${THRESHOLD}_${SESSION}"
 [ "$ANSWER" != "Yes" ] && exit 0
 
 CWD=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null)

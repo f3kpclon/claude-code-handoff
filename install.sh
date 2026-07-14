@@ -61,11 +61,36 @@ cp "$SCRIPT_DIR/hooks/statusline-context.sh"  "$HOOKS_DIR/statusline-context.sh"
 cp "$SCRIPT_DIR/hooks/handoff-monitor.sh"     "$HOOKS_DIR/handoff-monitor.sh"
 cp "$SCRIPT_DIR/hooks/pre-compact.sh"         "$HOOKS_DIR/pre-compact.sh"
 rm -f "$HOOKS_DIR/handoff-inject.sh"  # removed in v0.3 — dead code from old architecture
-# Inject CUSTOMIZE values into installed files
-sed -i.bak "s/^THRESHOLDS=.*/THRESHOLDS=(${THRESHOLDS})/" "$HOOKS_DIR/handoff-monitor.sh" && rm -f "$HOOKS_DIR/handoff-monitor.sh.bak"
-sed -i.bak "s|^DIALOG_TITLE=.*|DIALOG_TITLE=\"${DIALOG_TITLE}\"|" "$HOOKS_DIR/handoff-monitor.sh" && rm -f "$HOOKS_DIR/handoff-monitor.sh.bak"
-sed -i.bak "s|^DIALOG_MSG=.*|DIALOG_MSG='${DIALOG_MSG}'|" "$HOOKS_DIR/handoff-monitor.sh" && rm -f "$HOOKS_DIR/handoff-monitor.sh.bak"
-sed -i.bak "s|^💾 .*|${CONFIRM_MSG}|" "$SKILLS_DIR/handoff/SKILL.md" && rm -f "$SKILLS_DIR/handoff/SKILL.md.bak"
+# Inject CUSTOMIZE values into installed files — literal replacement via python3,
+# NOT sed. A value containing | & or \ silently corrupts sed's s///; python does
+# byte-literal replacement and shlex.quote emits valid bash for any content
+# (embedded quotes, $, spaces), while preserving the literal ${PCT_INT} token.
+HANDOFF_THRESHOLDS="$THRESHOLDS" \
+HANDOFF_DIALOG_TITLE="$DIALOG_TITLE" \
+HANDOFF_DIALOG_MSG="$DIALOG_MSG" \
+HANDOFF_CONFIRM_MSG="$CONFIRM_MSG" \
+python3 - "$HOOKS_DIR/handoff-monitor.sh" "$SKILLS_DIR/handoff/SKILL.md" <<'PYEOF'
+import os, shlex, sys
+from pathlib import Path
+
+monitor, skill = Path(sys.argv[1]), Path(sys.argv[2])
+
+def replace_line(path, prefix, new_line):
+    lines = path.read_text().splitlines()
+    for i, l in enumerate(lines):
+        if l.startswith(prefix):
+            lines[i] = new_line
+            break
+    else:
+        sys.stderr.write(f"⚠ no line starting with {prefix!r} in {path}\n")
+    path.write_text('\n'.join(lines) + '\n')
+
+thresholds = os.environ['HANDOFF_THRESHOLDS']
+replace_line(monitor, 'THRESHOLDS=',   f'THRESHOLDS=({thresholds})')
+replace_line(monitor, 'DIALOG_TITLE=', f'DIALOG_TITLE={shlex.quote(os.environ["HANDOFF_DIALOG_TITLE"])}')
+replace_line(monitor, 'DIALOG_MSG=',   f'DIALOG_MSG={shlex.quote(os.environ["HANDOFF_DIALOG_MSG"])}')
+replace_line(skill,   '💾 ',           os.environ['HANDOFF_CONFIRM_MSG'])
+PYEOF
 chmod +x "$HOOKS_DIR/statusline-context.sh" "$HOOKS_DIR/handoff-monitor.sh" "$HOOKS_DIR/pre-compact.sh"
 echo "✓ hooks installed (thresholds: ${THRESHOLDS})"
 

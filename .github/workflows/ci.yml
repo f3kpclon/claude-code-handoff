@@ -11,8 +11,8 @@ jobs:
     name: ShellCheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: ludeeus/action-shellcheck@master
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # v2.0.0
         with:
           scandir: '.'
           ignore_paths: addons
@@ -21,7 +21,7 @@ jobs:
     name: Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Run test suite
         run: bash test.sh
 
@@ -29,10 +29,15 @@ jobs:
     name: Security Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Scan for dangerous patterns
         run: |
-          SENSITIVE_FILES=$(find hooks/ skills/ install.sh uninstall.sh -type f 2>/dev/null)
+          # Includes test.sh: CI runs `bash test.sh`, so a payload there executes
+          # on the runner — it must be scanned, not just the shipped files.
+          # ci.yml is deliberately NOT scanned: the scan patterns live in this
+          # file (self-match), and a malicious workflow edit just deletes this
+          # job anyway — the real control there is CODEOWNERS + branch protection.
+          SENSITIVE_FILES=$(find hooks/ skills/ install.sh uninstall.sh test.sh -type f 2>/dev/null)
           FOUND=0
 
           scan() {
