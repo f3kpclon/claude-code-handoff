@@ -158,7 +158,7 @@ Note: `THRESHOLDS` controls when the **dialog** fires; the statusline emoji band
 bash test.sh
 ```
 
-Verifies snapshot save logic, install idempotency, PreCompact behavior, statusline safety, and monitor threshold/sentinel logic (with mocked dialogs). 36 assertions.
+Verifies snapshot save logic, install idempotency, PreCompact behavior, statusline safety, monitor threshold/sentinel logic (with mocked dialogs), and CUSTOMIZE injection robustness. 41 assertions.
 
 ## Security
 
@@ -215,6 +215,6 @@ Removes all hooks, the `/handoff` command, skills, and surgically cleans `settin
 | `hooks/statusline-context.sh` | Renders the context progress bar in the status line |
 | `hooks/handoff-monitor.sh` | Fires after each response — shows dialog at thresholds |
 | `hooks/pre-compact.sh` | Saves a bash-only mini-snapshot before auto-compaction |
-| `test.sh` | 36 assertions — snapshot logic, install idempotency, PreCompact, statusline safety, monitor thresholds |
+| `test.sh` | 41 assertions — snapshot logic, install idempotency, PreCompact, statusline safety, monitor thresholds, CUSTOMIZE injection |
 | `install.sh` | Installs everything into `~/.claude/` |
 | `uninstall.sh` | Removes everything installed |

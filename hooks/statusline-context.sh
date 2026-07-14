@@ -44,7 +44,9 @@ SID=$(echo "$input" | jq -r '.session_id // empty')
 if [ -n "$SID" ]; then
     mkdir -p ~/.claude/ctx
     echo "$used" > ~/.claude/ctx/"$SID".pct
-    find ~/.claude/ctx -name '*.pct' -mmin +1440 -delete 2>/dev/null
+    # Reap stale per-session state: pct files and handoff threshold sentinels
+    # (moved here from /tmp) older than a day — sessions long gone.
+    find ~/.claude/ctx \( -name '*.pct' -o -name 'handoff_w*' \) -mmin +1440 -delete 2>/dev/null
 fi
 pct_int=$(( ${used%.*} ))
 
