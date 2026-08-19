@@ -43,13 +43,49 @@ The status bar renders up to 4 lines depending on your plan:
 ```
 [claude-sonnet-4-6] | Branch: 🌿 main +1 ~2 | 💰 $0.03
 🧠 Contexto       😈 [████████░░░░░░░░░░░░] 45% — listo mi guasho!
-⏱ Cupo horario   🔪 [███████████████░░░░░] 75% — se acaba el turno weón
+⏱ Cupo horario   🔪 [███████████████░░░░░] 75% — 1h12m — se acaba el turno weón
 📅 Cupo semanal  😎 [████░░░░░░░░░░░░░░░░] 23% — tranqui, semana larga
 ```
 
 **Line 1** — always shown: active model ID, git branch + staged/modified count, session cost.  
 **Line 2** — always shown: session context window usage bar.  
 **Lines 3–4** — Pro/Max only: 5-hour rolling quota and 7-day weekly quota bars.
+
+#### 5-hour countdown
+
+Line 3 shows the time left in the current 5-hour window (`1h12m` / `43m` / `<1m`),
+read from `rate_limits.five_hour.resets_at` in the payload Claude Code hands the
+statusline. Nothing is polled and no timer runs: the value is already in the
+JSON, and the countdown moves because the clock moves.
+
+Once the window is over, the line stops drawing the bar:
+
+```
+⏱ Cupo horario   🆕 ventana vencida — el próximo mensaje abre turno nuevo
+```
+
+That is not cosmetic. After a reset the payload still reports the *dead*
+window's `used_percentage` until the next API response, so painting the bar
+there would show stale usage as if it were current.
+
+The countdown needs `refreshInterval` in your `statusLine` settings, or Claude
+Code only re-renders after each assistant message and the number freezes.
+`install.sh` sets `10` on a fresh install and adds it to an existing one — an
+interval you set yourself is left alone.
+
+#### Rate-limit state on disk
+
+When the payload carries rate limits, two files are maintained:
+
+| File | What it holds |
+|---|---|
+| `~/.claude/ratelimit.json` | Current 5h/7d usage and `resets_at`, plus `observed_at` so a reader can tell how fresh it is |
+| `~/.claude/ratelimit-history.jsonl` | One line per window turnover — the record of where the 5h boundaries fall |
+
+Written at most once every 30s and appended only when `resets_at` actually
+changes, so a 1-second `refreshInterval` does not turn into 86,400 daily writes.
+Writes are atomic, and the files are account-wide rather than per-session
+(unlike `ctx_pct`) because the quota is.
 
 **Context window levels:**
 
@@ -73,6 +109,7 @@ The status bar renders up to 4 lines depending on your plan:
 | 70–80% | 🔪 | se acaba el turno weón |
 | 80–90% | 💀 | casi sin cupo horario |
 | ≥ 90% | 🆘 | quedando pato weón! al 100 no money no honey |
+| window over | 🆕 | ventana vencida — el próximo mensaje abre turno nuevo |
 
 **Cupo semanal (7d) levels:**
 

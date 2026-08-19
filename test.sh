@@ -296,6 +296,140 @@ grep -qF '${PCT_INT}' "$MON" \
 rm -f "$NASTY_INSTALL"
 rm -rf "$FAKE_HOME"
 
+# ── Test 9: statusline 5h countdown & rate-limit state ───────────────────────
+echo "9. statusline 5h countdown & rate-limit state"
+
+SL="$SCRIPT_DIR/hooks/statusline-context.sh"
+SL_HOME=$(mktemp -d)
+mkdir -p "$SL_HOME/.claude"
+
+sl_run() { echo "$1" | HOME="$SL_HOME" COLUMNS=80 bash "$SL" 2>/dev/null; }
+
+# Relative payload: `now` is read at call time, so a slow suite can't drift the
+# expected countdown across a minute boundary and make these tests flaky.
+sl_payload_rel() {  # $1 = seconds until reset, $2 = used_percentage
+  sl_payload_abs "$(( $(date +%s) + $1 ))" "$2"
+}
+sl_payload_abs() {  # $1 = absolute resets_at, $2 = used_percentage
+  printf '{"model":{"id":"opus"},"workspace":{"current_dir":"%s"},"cost":{"total_cost_usd":0.5},"context_window":{"used_percentage":42},"session_id":"t9","rate_limits":{"five_hour":{"used_percentage":%s,"resets_at":%s}}}' \
+    "$SL_HOME" "$2" "$1"
+}
+
+sl_run "$(sl_payload_rel 10020 58)" | grep -q '58% — 2h47m —' \
+  && pass "countdown >1h renders as 2h47m" || fail "countdown >1h wrong"
+sl_run "$(sl_payload_rel 2580 91)"  | grep -q '91% — 43m —' \
+  && pass "countdown <1h renders as 43m"   || fail "countdown <1h wrong"
+sl_run "$(sl_payload_rel 30 91)"    | grep -q '91% — <1m —' \
+  && pass "countdown <1m renders as <1m"   || fail "countdown <1m wrong"
+
+# An expired window must NOT paint the bar: used_percentage still carries the
+# DEAD window's value, so rendering it would report stale usage as if it were live.
+SL_EXPIRED=$(sl_run "$(sl_payload_rel -600 91)")
+echo "$SL_EXPIRED" | grep -q 'ventana vencida' \
+  && pass "expired window announces itself" || fail "expired window not announced"
+echo "$SL_EXPIRED" | grep -q '91%' \
+  && fail "expired window still paints the dead window's %" \
+  || pass "expired window hides the stale %"
+
+# Field-alignment regression. The single jq call must use `// ""` and never
+# `// empty`: with `// empty` an absent rate_limits block drops its lines and
+# every field below it slides up one variable — silently, with no error.
+SL_NORL='{"model":{"id":"sonnet-x"},"workspace":{"current_dir":"/nonexistent-t9"},"cost":{"total_cost_usd":7.77},"context_window":{"used_percentage":42},"session_id":"t9b"}'
+SL_NORL_OUT=$(sl_run "$SL_NORL")
+echo "$SL_NORL_OUT" | grep -q '\[sonnet-x\]' \
+  && pass "model survives a missing rate_limits block" || fail "model field shifted"
+# shellcheck disable=SC2016  # $7.77 is the literal cost string we grep for, not an expansion
+echo "$SL_NORL_OUT" | grep -qF '$7.77' \
+  && pass "cost survives a missing rate_limits block"  || fail "cost field shifted"
+echo "$SL_NORL_OUT" | grep -q 'Cupo horario' \
+  && fail "cupo line rendered without rate_limits" \
+  || pass "no cupo line for a payload without rate_limits"
+
+# Write policy: the state file refreshes on a timer; the history log grows ONLY
+# when resets_at actually changes. That log is the record of window boundaries.
+SL_RL="$SL_HOME/.claude/ratelimit.json"
+SL_HIST="$SL_HOME/.claude/ratelimit-history.jsonl"
+SL_FIXED=$(( $(date +%s) + 10020 ))
+# Clean slate: the countdown tests above already wrote a state file with THEIR
+# resets_at. Inheriting it would make the "no change" assertion below depend on
+# whether those values happened to collide.
+rm -f "$SL_RL" "$SL_HIST"
+sl_run "$(sl_payload_abs "$SL_FIXED" 58)" > /dev/null
+[ -f "$SL_RL" ] && pass "ratelimit.json written" || fail "ratelimit.json never written"
+H1=$(wc -l < "$SL_HIST" | tr -d ' ')
+
+touch -t 200001010000 "$SL_RL"
+sl_run "$(sl_payload_abs "$SL_FIXED" 59)" > /dev/null
+H2=$(wc -l < "$SL_HIST" | tr -d ' ')
+[ "$H2" = "$H1" ] && pass "same resets_at appends no history line" \
+                  || fail "history grew without a window change ($H1 → $H2)"
+
+touch -t 200001010000 "$SL_RL"
+sl_run "$(sl_payload_abs "$(( SL_FIXED + 9999 ))" 12)" > /dev/null
+H3=$(wc -l < "$SL_HIST" | tr -d ' ')
+[ "$H3" = "$(( H2 + 1 ))" ] && pass "a new resets_at appends exactly one history line" \
+                            || fail "history delta wrong ($H2 → $H3)"
+
+sl_run "$(sl_payload_abs "$(( SL_FIXED + 12345 ))" 13)" > /dev/null
+H4=$(wc -l < "$SL_HIST" | tr -d ' ')
+[ "$H4" = "$H3" ] && pass "write throttle holds while the state file is fresh" \
+                  || fail "throttle leaked a write ($H3 → $H4)"
+
+# Both artifacts are machine-read by whatever consumes the window boundary —
+# malformed JSON here fails silently downstream, so assert it here instead.
+HIST_BAD=0
+while IFS= read -r line; do
+  echo "$line" | jq -e . > /dev/null 2>&1 || HIST_BAD=1
+done < "$SL_HIST"
+[ "$HIST_BAD" = 0 ] && pass "every history line is valid JSON" || fail "history contains malformed JSON"
+jq -e . "$SL_RL" > /dev/null 2>&1 \
+  && pass "ratelimit.json is valid JSON" || fail "ratelimit.json is malformed"
+
+rm -rf "$SL_HOME"
+
+# ── Test 10: install.sh registers refreshInterval ────────────────────────────
+# Without it Claude Code re-renders the statusline only after each assistant
+# message, so the 5h countdown freezes mid-window and reads as a broken clock —
+# a failure that looks identical to "the feature was never installed".
+echo "10. install.sh refreshInterval (keeps the countdown live)"
+
+RI_HOME=$(mktemp -d)
+ri_interval() {  # prints the configured refreshInterval, or "unset"
+  python3 - "$RI_HOME/.claude/settings.json" <<'PYEOF'
+import json, sys
+sl = json.load(open(sys.argv[1])).get('statusLine', {})
+print(sl.get('refreshInterval', 'unset'))
+PYEOF
+}
+
+HOME="$RI_HOME" bash "$SCRIPT_DIR/install.sh" > /dev/null 2>&1 || true
+[ "$(ri_interval)" = "10" ] \
+  && pass "fresh install sets refreshInterval=10" || fail "fresh install left refreshInterval=$(ri_interval)"
+
+# v0.3 upgrade path: our statusline is already registered but predates the countdown
+python3 - "$RI_HOME/.claude/settings.json" <<'PYEOF'
+import json, sys
+p = sys.argv[1]; s = json.load(open(p))
+s['statusLine'].pop('refreshInterval', None)
+json.dump(s, open(p, 'w'), indent=2)
+PYEOF
+HOME="$RI_HOME" bash "$SCRIPT_DIR/install.sh" > /dev/null 2>&1 || true
+[ "$(ri_interval)" = "10" ] \
+  && pass "upgrade adds refreshInterval to an existing install" || fail "upgrade left refreshInterval=$(ri_interval)"
+
+# An interval the user picked is theirs — reinstalling must not overwrite it
+python3 - "$RI_HOME/.claude/settings.json" <<'PYEOF'
+import json, sys
+p = sys.argv[1]; s = json.load(open(p))
+s['statusLine']['refreshInterval'] = 1
+json.dump(s, open(p, 'w'), indent=2)
+PYEOF
+HOME="$RI_HOME" bash "$SCRIPT_DIR/install.sh" > /dev/null 2>&1 || true
+[ "$(ri_interval)" = "1" ] \
+  && pass "a user-chosen refreshInterval is preserved" || fail "clobbered the user's refreshInterval (now $(ri_interval))"
+
+rm -rf "$RI_HOME"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
