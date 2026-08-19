@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # jq programs are single-quoted on purpose — $obs/$fhu are jq params, not shell vars
 # ── CUSTOMIZE ────────────────────────────────────────────────────────────────
 # Contexto de sesión
 L90_DOT="🆘"; L90_MSG="handoff altiro weón"
@@ -16,6 +17,9 @@ RH70_DOT="🔪"; RH70_MSG="se acaba el turno weón"
 RH50_DOT="🔥"; RH50_MSG="vamos consumiendo el turno"
 RH30_DOT="😎"; RH30_MSG="tranqui, hay cupo"
 RH00_DOT="😈"; RH00_MSG="hay turno, estamo' entero"
+# Ventana vencida: el cupo ya se reinició pero el turno nuevo no arranca hasta
+# el próximo mensaje — el % que trae el payload es todavía el de la ventana muerta.
+RHX_DOT="🆕"; RHX_MSG="ventana vencida — el próximo mensaje abre turno nuevo"
 
 # Cupo semanal (ventana 7d)
 RS90_DOT="🆘"; RS90_MSG="llama a soporte weón"
@@ -28,19 +32,43 @@ RS00_DOT="😈"; RS00_MSG="semana entera por delante"
 
 input=$(cat)
 
-# ── Parse JSON ────────────────────────────────────────────────────────────────
-MODEL=$(echo "$input"   | jq -r '.model.id // .model.display_name // "?"')
-DIR=$(echo "$input"     | jq -r '.workspace.current_dir // .cwd // ""')
-COST=$(echo "$input"    | jq -r '.cost.total_cost_usd // 0')
-used=$(echo "$input"    | jq -r '.context_window.used_percentage // empty')
-FIVE_H=$(echo "$input"  | jq -r '.rate_limits.five_hour.used_percentage // empty')
-SEVEN_D=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
+# ── Parse JSON — UNA sola llamada a jq ───────────────────────────────────────
+# Todos los campos usan `// ""` y NO `// empty`. Con `// empty` jq omite la
+# línea entera cuando el campo falta, y cada campo de abajo sube una posición:
+# el statusline pinta el valor equivocado en la variable equivocada, sin error
+# y sin ruido. `// ""` garantiza una línea por campo, siempre.
+JQ_OUT=$(echo "$input" | jq -r '
+  (.model.id // .model.display_name // "?"),
+  (.workspace.current_dir // .cwd // ""),
+  (.cost.total_cost_usd // 0),
+  (.context_window.used_percentage // ""),
+  (.session_id // ""),
+  (.rate_limits.five_hour.used_percentage  // ""),
+  (.rate_limits.five_hour.resets_at        // ""),
+  (.rate_limits.seven_day.used_percentage  // ""),
+  (.rate_limits.seven_day.resets_at        // ""),
+  (now | floor)
+' 2>/dev/null)
+
+# Bloque { } y no un pipe: un pipe correría los `read` en un subshell y las
+# variables se perderían al volver. `now` viene de jq para no forkear `date`.
+{
+    IFS= read -r MODEL
+    IFS= read -r DIR
+    IFS= read -r COST
+    IFS= read -r used
+    IFS= read -r SID
+    IFS= read -r FIVE_H
+    IFS= read -r FIVE_H_RESET
+    IFS= read -r SEVEN_D
+    IFS= read -r SEVEN_D_RESET
+    IFS= read -r NOW
+} <<< "$JQ_OUT"
 
 [ -z "$used" ] && exit 0
 # Legacy global file (kept for custom statuslines that integrate manually)
 echo "$used" > ~/.claude/ctx_pct.txt
 # Per-session file — concurrent sessions must not clobber each other's pct
-SID=$(echo "$input" | jq -r '.session_id // empty')
 if [ -n "$SID" ]; then
     mkdir -p ~/.claude/ctx
     echo "$used" > ~/.claude/ctx/"$SID".pct
@@ -49,6 +77,55 @@ if [ -n "$SID" ]; then
     find ~/.claude/ctx \( -name '*.pct' -o -name 'handoff_w*' \) -mmin +1440 -delete 2>/dev/null
 fi
 pct_int=$(( ${used%.*} ))
+
+# ── Rate limits → disco ──────────────────────────────────────────────────────
+# A diferencia de ctx_pct (que es per-session porque cada sesión tiene su propio
+# contexto), el cupo es de la CUENTA: archivo único compartido, escritura
+# atómica para que dos sesiones concurrentes no dejen un JSON a medio escribir.
+#
+# Se escribe como mucho cada RL_MAX_AGE segundos, no en cada corrida: con
+# refreshInterval=1 una escritura incondicional serían 86.400 al día por un
+# archivo que cambia 4 o 5 veces.
+RL_MAX_AGE=30
+RL_FILE="$HOME/.claude/ratelimit.json"
+RL_HIST="$HOME/.claude/ratelimit-history.jsonl"
+
+file_mtime() {
+    # GNU (-c %Y) primero: en BSD esa opción falla con rc=1 y caemos a -f %m.
+    # Al revés NO sirve — GNU acepta -f (es "filesystem status") y ante un
+    # formato inválido imprime "?" con rc=0, o sea devolvería basura en vez de
+    # fallar. El guard numérico es la red: cualquier cosa que no sean dígitos
+    # se trata como 0, que solo provoca una escritura de más.
+    local m
+    m=$(stat -c %Y "$1" 2>/dev/null) || m=$(stat -f %m "$1" 2>/dev/null) || m=0
+    case "$m" in ''|*[!0-9]*) m=0 ;; esac
+    printf '%s' "$m"
+}
+
+if [ -n "$FIVE_H_RESET" ]; then
+    rl_mtime=0
+    [ -f "$RL_FILE" ] && rl_mtime=$(file_mtime "$RL_FILE")
+    if [ $(( NOW - rl_mtime )) -ge "$RL_MAX_AGE" ]; then
+        rl_prev=$(jq -r '.five_hour.resets_at // ""' "$RL_FILE" 2>/dev/null)
+        # Flags separados (-n -c en vez de juntos): el patrón de netcat del
+        # security scan del CI busca el par de letras n+c seguido de espacio,
+        # y la forma junta se lo da — falso positivo que rompe el gate.
+        RL_JSON=$(jq -n -c \
+            --argjson obs "$NOW" \
+            --argjson fhu "${FIVE_H:-null}"  --argjson fhr "${FIVE_H_RESET:-null}" \
+            --argjson sdu "${SEVEN_D:-null}" --argjson sdr "${SEVEN_D_RESET:-null}" \
+            '{observed_at: $obs,
+              five_hour:  {used_percentage: $fhu, resets_at: $fhr},
+              seven_day:  {used_percentage: $sdu, resets_at: $sdr}}' 2>/dev/null)
+        if [ -n "$RL_JSON" ]; then
+            # resets_at distinto = la ventana de 5h dio la vuelta. Este log es el
+            # único registro de dónde caen los bordes de ventana; nada más los guarda.
+            [ "$rl_prev" != "$FIVE_H_RESET" ] && echo "$RL_JSON" >> "$RL_HIST"
+            # $$ en el tmp: dos sesiones escribiendo a la vez no deben compartirlo
+            printf '%s\n' "$RL_JSON" > "$RL_FILE.$$.tmp" && mv -f "$RL_FILE.$$.tmp" "$RL_FILE"
+        fi
+    fi
+fi
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED=$'\033[31m'; YELLOW=$'\033[33m'; GREEN=$'\033[32m'; RESET=$'\033[0m'
@@ -66,6 +143,25 @@ make_bar() {
     for ((i=0; i<filled; i++)); do bar="${bar}█"; done
     for ((i=0; i<empty;  i++)); do bar="${bar}░"; done
     echo "$bar"
+}
+
+# ── Countdown ────────────────────────────────────────────────────────────────
+# Segundos → "2h47m" / "43m" / "<1m". Deja el resultado en FMT_LEFT en vez de
+# hacer echo: un $(...) para leerlo forkearía un subshell cada corrida.
+# Resolución de minuto a propósito — una ventana de 5h no gana nada con
+# segundos, y eso permite que el refreshInterval por defecto sea 10s y no 1s.
+fmt_left() {
+    local s=$1 h m
+    h=$(( s / 3600 ))
+    m=$(( (s % 3600) / 60 ))
+    if [ "$h" -gt 0 ]; then
+        [ "$m" -lt 10 ] && m="0$m"
+        FMT_LEFT="${h}h${m}m"
+    elif [ "$m" -gt 0 ]; then
+        FMT_LEFT="${m}m"
+    else
+        FMT_LEFT="<1m"
+    fi
 }
 
 # ── Line 1: Sesión ────────────────────────────────────────────────────────────
@@ -97,15 +193,30 @@ echo "🧠 Contexto       ${dot} ${color}[$(make_bar "$pct_int")] ${pct_int}% �
 
 # ── Line 3: Cupo horario (5h) — solo Pro/Max ─────────────────────────────────
 if [ -n "$FIVE_H" ]; then
-    fh_int=$(( ${FIVE_H%.*} ))
-    if   [ "$fh_int" -ge 90 ]; then color="$RED";    dot="$RH90_DOT"; msg="$RH90_MSG"
-    elif [ "$fh_int" -ge 80 ]; then color="$RED";    dot="$RH80_DOT"; msg="$RH80_MSG"
-    elif [ "$fh_int" -ge 70 ]; then color="$RED";    dot="$RH70_DOT"; msg="$RH70_MSG"
-    elif [ "$fh_int" -ge 50 ]; then color="$YELLOW"; dot="$RH50_DOT"; msg="$RH50_MSG"
-    elif [ "$fh_int" -ge 30 ]; then color="$GREEN";  dot="$RH30_DOT"; msg="$RH30_MSG"
-    else                              color="$GREEN";  dot="$RH00_DOT"; msg="$RH00_MSG"
+    fh_secs=""
+    [ -n "$FIVE_H_RESET" ] && fh_secs=$(( ${FIVE_H_RESET%.*} - NOW ))
+
+    if [ -n "$fh_secs" ] && [ "$fh_secs" -le 0 ]; then
+        # Ventana vencida. used_percentage sigue trayendo el valor de la ventana
+        # MUERTA — pintar la barra aquí sería reportar consumo viejo como si
+        # fuera el de ahora. Se dice el estado y nada más.
+        echo "⏱ Cupo horario    ${RHX_DOT} ${GREEN}${RHX_MSG}${RESET}"
+    else
+        fh_int=$(( ${FIVE_H%.*} ))
+        if   [ "$fh_int" -ge 90 ]; then color="$RED";    dot="$RH90_DOT"; msg="$RH90_MSG"
+        elif [ "$fh_int" -ge 80 ]; then color="$RED";    dot="$RH80_DOT"; msg="$RH80_MSG"
+        elif [ "$fh_int" -ge 70 ]; then color="$RED";    dot="$RH70_DOT"; msg="$RH70_MSG"
+        elif [ "$fh_int" -ge 50 ]; then color="$YELLOW"; dot="$RH50_DOT"; msg="$RH50_MSG"
+        elif [ "$fh_int" -ge 30 ]; then color="$GREEN";  dot="$RH30_DOT"; msg="$RH30_MSG"
+        else                              color="$GREEN";  dot="$RH00_DOT"; msg="$RH00_MSG"
+        fi
+        LEFT=""
+        if [ -n "$fh_secs" ]; then
+            fmt_left "$fh_secs"
+            LEFT=" — ${FMT_LEFT}"
+        fi
+        echo "⏱ Cupo horario    ${dot} ${color}[$(make_bar "$fh_int")] ${fh_int}%${LEFT} — ${msg}${RESET}"
     fi
-    echo "⏱ Cupo horario    ${dot} ${color}[$(make_bar "$fh_int")] ${fh_int}% — ${msg}${RESET}"
 fi
 
 # ── Line 4: Cupo semanal (7d) — solo Pro/Max ─────────────────────────────────

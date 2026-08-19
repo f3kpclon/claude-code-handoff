@@ -22,6 +22,15 @@ if [ -d "$CLAUDE_DIR/ctx" ]; then
 fi
 rm -f "$CLAUDE_DIR/ctx_pct.txt"
 
+# ── Remove rate-limit state ───────────────────────────────────────────────────
+# ratelimit.json is pure runtime state — safe to drop. The history log is not:
+# it is the only record of where the 5h window boundaries fell, and it is the
+# user's data. Report it instead of deleting it behind their back.
+rm -f "$CLAUDE_DIR/ratelimit.json" "$CLAUDE_DIR"/ratelimit.json.*.tmp
+if [ -f "$CLAUDE_DIR/ratelimit-history.jsonl" ]; then
+  echo "• kept ratelimit-history.jsonl (window boundary log — delete it yourself if you don't want it)"
+fi
+
 # ── Remove command ────────────────────────────────────────────────────────────
 if [ -f "$CLAUDE_DIR/commands/handoff.md" ]; then
   rm "$CLAUDE_DIR/commands/handoff.md"

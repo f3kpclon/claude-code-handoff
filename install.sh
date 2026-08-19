@@ -145,14 +145,28 @@ settings = json.loads(path.read_text()) if path.exists() else {}
 # A foreign statusline means threshold alerts silently never fire — refuse to
 # pretend the install worked in that case (verification below reports it).
 OURS = 'statusline-context.sh'
+# refreshInterval is what makes the 5h countdown tick. Without it Claude Code
+# only re-renders the statusline after each assistant message, so the countdown
+# freezes between messages and reads as a broken clock. 10s is deliberate: the
+# countdown has minute resolution, so 1s would pay 10x the process cost every
+# second for a digit that cannot change.
+SL_CFG = {"type": "command",
+          "command": "bash ~/.claude/hooks/statusline-context.sh",
+          "refreshInterval": 10}
 sl = settings.get('statusLine')
 if sl is None:
-    settings['statusLine'] = {"type": "command", "command": "bash ~/.claude/hooks/statusline-context.sh"}
-    print("✓ statusLine configured")
+    settings['statusLine'] = dict(SL_CFG)
+    print("✓ statusLine configured (refreshInterval=10)")
 elif OURS in sl.get('command', ''):
-    print("✓ statusLine — already ours, skipped")
+    # Upgrade path for installs predating the countdown. An interval the user
+    # already chose is theirs — never overwrite it.
+    if 'refreshInterval' not in sl:
+        sl['refreshInterval'] = 10
+        print("✓ statusLine — ours; added refreshInterval=10 for the live countdown")
+    else:
+        print("✓ statusLine — already ours, skipped (refreshInterval=%s kept)" % sl['refreshInterval'])
 elif __import__('os').environ.get('HANDOFF_FORCE_STATUSLINE') == '1':
-    settings['statusLine'] = {"type": "command", "command": "bash ~/.claude/hooks/statusline-context.sh"}
+    settings['statusLine'] = dict(SL_CFG)
     print("✓ statusLine replaced (HANDOFF_FORCE_STATUSLINE=1)")
 else:
     print("⚠ statusLine — a different statusline is configured; NOT replaced")
