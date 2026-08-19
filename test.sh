@@ -315,11 +315,23 @@ sl_payload_abs() {  # $1 = absolute resets_at, $2 = used_percentage
     "$SL_HOME" "$2" "$1"
 }
 
-sl_run "$(sl_payload_rel 10020 58)" | grep -q '58% — 2h47m —' \
+# Offsets land mid-minute (…+30s) on purpose. On the exact boundary a single
+# second passing between this date(1) call and the `now` jq computes inside the
+# script drops the result into the previous minute — 10020s renders "2h46m",
+# not "2h47m" — and the assertion fails perhaps one run in fifteen.
+# Output is captured, never piped. Under `set -o pipefail` a consumer that
+# exits early (grep -q on a first-line match, head -1) closes the pipe while the
+# statusline is still writing later lines; it takes SIGPIPE and the pipeline
+# reports failure no matter what the grep found — and on an inverted assertion
+# that reads as a false PASS. $(...) reads to EOF, so it cannot happen.
+CD_OUT=$(sl_run "$(sl_payload_rel 10050 58)")
+echo "$CD_OUT" | grep -q '58% — 2h47m —' \
   && pass "countdown >1h renders as 2h47m" || fail "countdown >1h wrong"
-sl_run "$(sl_payload_rel 2580 91)"  | grep -q '91% — 43m —' \
+CD_OUT=$(sl_run "$(sl_payload_rel 2610 91)")
+echo "$CD_OUT" | grep -q '91% — 43m —' \
   && pass "countdown <1h renders as 43m"   || fail "countdown <1h wrong"
-sl_run "$(sl_payload_rel 30 91)"    | grep -q '91% — <1m —' \
+CD_OUT=$(sl_run "$(sl_payload_rel 30 91)")
+echo "$CD_OUT" | grep -q '91% — <1m —' \
   && pass "countdown <1m renders as <1m"   || fail "countdown <1m wrong"
 
 # An expired window must NOT paint the bar: used_percentage still carries the
@@ -429,6 +441,61 @@ HOME="$RI_HOME" bash "$SCRIPT_DIR/install.sh" > /dev/null 2>&1 || true
   && pass "a user-chosen refreshInterval is preserved" || fail "clobbered the user's refreshInterval (now $(ri_interval))"
 
 rm -rf "$RI_HOME"
+
+# ── Test 11: statusline caches (git part + housekeeping sweep) ───────────────
+# A cache that never refreshes and a sweep that never runs both fail silently:
+# the statusline keeps rendering, just with a frozen branch or a directory that
+# grows forever. Both directions are asserted here.
+echo "11. statusline caches: git part & housekeeping throttle"
+
+CA_HOME=$(mktemp -d)
+mkdir -p "$CA_HOME/.claude"
+CA_CTX="$CA_HOME/.claude/ctx"
+ca_payload() {
+  printf '{"model":{"id":"opus"},"workspace":{"current_dir":"%s"},"cost":{"total_cost_usd":1.0},"context_window":{"used_percentage":42},"session_id":"ca1"}' \
+    "$SCRIPT_DIR"
+}
+ca_run() { ca_payload | HOME="$CA_HOME" bash "$SCRIPT_DIR/hooks/statusline-context.sh" 2>/dev/null; }
+
+ca_run > /dev/null
+CA_GIT=$(find "$CA_CTX" -name 'gitpart_*' 2>/dev/null | head -1)
+[ -n "$CA_GIT" ] && pass "git part cache file created" || fail "no gitpart_* cache written"
+
+# Fresh timestamp + a sentinel payload: if the cache is really consulted, the
+# sentinel comes back out instead of the real branch.
+printf '%s|%s' "$(date +%s)" " | SENTINEL-CACHED" > "$CA_GIT"
+CA_OUT=$(ca_run)
+echo "$CA_OUT" | grep -q 'SENTINEL-CACHED' \
+  && pass "fresh cache is reused instead of forking git" || fail "cache ignored — git ran anyway"
+
+# Same sentinel, timestamp aged past GIT_TTL: it must be recomputed, not served.
+printf '%s|%s' "0" " | SENTINEL-CACHED" > "$CA_GIT"
+CA_OUT=$(ca_run)
+echo "$CA_OUT" | grep -q 'SENTINEL-CACHED' \
+  && fail "stale cache served — git part would freeze forever" \
+  || pass "stale cache is recomputed"
+
+# A corrupt timestamp must degrade to a miss, never render a torn value.
+printf '%s' "garbage-no-separator" > "$CA_GIT"
+CA_OUT=$(ca_run)
+echo "$CA_OUT" | grep -q 'garbage' \
+  && fail "corrupt cache leaked into the statusline" || pass "corrupt cache treated as a miss"
+
+# Housekeeping: the sweep still deletes day-old state when the stamp is stale...
+touch -t 200001010000 "$CA_CTX/zombie.pct"
+printf '%s' "0" > "$CA_CTX/.housekeeping"
+ca_run > /dev/null
+[ -f "$CA_CTX/zombie.pct" ] \
+  && fail "stale stamp did not trigger the sweep" || pass "stale stamp triggers the sweep"
+
+# ...and is skipped while the stamp is fresh, which is the whole point.
+touch -t 200001010000 "$CA_CTX/zombie2.pct"
+printf '%s' "$(date +%s)" > "$CA_CTX/.housekeeping"
+ca_run > /dev/null
+[ -f "$CA_CTX/zombie2.pct" ] \
+  && pass "fresh stamp skips the sweep" || fail "sweep ran despite a fresh stamp"
+
+rm -rf "$CA_HOME"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

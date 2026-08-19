@@ -66,15 +66,32 @@ JQ_OUT=$(echo "$input" | jq -r '
 } <<< "$JQ_OUT"
 
 [ -z "$used" ] && exit 0
+CTX_DIR="$HOME/.claude/ctx"
 # Legacy global file (kept for custom statuslines that integrate manually)
 echo "$used" > ~/.claude/ctx_pct.txt
 # Per-session file — concurrent sessions must not clobber each other's pct
 if [ -n "$SID" ]; then
-    mkdir -p ~/.claude/ctx
-    echo "$used" > ~/.claude/ctx/"$SID".pct
-    # Reap stale per-session state: pct files and handoff threshold sentinels
-    # (moved here from /tmp) older than a day — sessions long gone.
-    find ~/.claude/ctx \( -name '*.pct' -o -name 'handoff_w*' \) -mmin +1440 -delete 2>/dev/null
+    # `[ -d ]` is a builtin; `mkdir -p` is a 5 ms fork that was being paid on
+    # every run for a directory that already exists.
+    [ -d "$CTX_DIR" ] || mkdir -p "$CTX_DIR"
+    echo "$used" > "$CTX_DIR/$SID.pct"
+    # Reap stale per-session state: pct files, handoff threshold sentinels and
+    # abandoned git caches older than a day — sessions long gone.
+    #
+    # Throttled to hourly. Measured at 37 ms, this find was the single most
+    # expensive thing in the statusline: at refreshInterval=1 it scanned the
+    # directory 86,400 times a day to delete files that are 24 h old. The
+    # timestamp is read with $(<...), which costs no external process.
+    HK="$CTX_DIR/.housekeeping"
+    hk_ts=0
+    [ -f "$HK" ] && hk_ts=$(<"$HK")
+    case "$hk_ts" in ''|*[!0-9]*) hk_ts=0 ;; esac
+    if [ $(( NOW - hk_ts )) -ge 3600 ]; then
+        # Stamped BEFORE the sweep: if the find dies, the next run waits an hour
+        # instead of retrying the expensive scan every single second.
+        printf '%s' "$NOW" > "$HK"
+        find "$CTX_DIR" \( -name '*.pct' -o -name 'handoff_w*' -o -name 'gitpart_*' \) -mmin +1440 -delete 2>/dev/null
+    fi
 fi
 pct_int=$(( ${used%.*} ))
 
@@ -165,17 +182,43 @@ fmt_left() {
 }
 
 # ── Line 1: Sesión ────────────────────────────────────────────────────────────
-COST_FMT=$(printf '$%.2f' "$COST")
+# printf -v writes into the variable directly; $(printf ...) would fork a
+# subshell for something bash can do in place.
+printf -v COST_FMT '$%.2f' "$COST"
 
+# Git, cached. The four git calls measured 51 ms — a quarter of the whole
+# statusline — for a branch that changes every few hours and counters that
+# tolerate a few seconds of lag just fine.
+#
+# The cache line is "<epoch>|<rendered git part>". The rendered part contains
+# its own "|", which is why the timestamp is cut with %%|* (up to the FIRST
+# separator) and the payload with #*| (the rest). A reader landing between the
+# truncate and the write sees an empty file, the numeric guard treats that as a
+# miss and recomputes — there is no way to read a torn value.
+GIT_TTL=3
 GIT_PART=""
-if git -C "$DIR" rev-parse --git-dir > /dev/null 2>&1; then
-    BRANCH=$(git -C "$DIR" branch --show-current 2>/dev/null)
-    STAGED=$(git   -C "$DIR" diff --cached --numstat 2>/dev/null | wc -l | tr -d ' ')
-    MODIFIED=$(git -C "$DIR" diff --numstat 2>/dev/null | wc -l | tr -d ' ')
-    GIT_PART="Branch: 🌿 ${BRANCH}"
-    [ "$STAGED"   -gt 0 ] && GIT_PART="${GIT_PART} +${STAGED}"
-    [ "$MODIFIED" -gt 0 ] && GIT_PART="${GIT_PART} ~${MODIFIED}"
-    GIT_PART=" | ${GIT_PART}"
+if [ -n "$DIR" ]; then
+    GIT_CACHE="$CTX_DIR/gitpart_${DIR//\//_}"
+    git_c=""
+    [ -f "$GIT_CACHE" ] && git_c=$(<"$GIT_CACHE")
+    git_ts="${git_c%%|*}"
+    case "$git_ts" in ''|*[!0-9]*) git_ts=-1 ;; esac
+
+    if [ "$git_ts" -ge 0 ] && [ $(( NOW - git_ts )) -lt "$GIT_TTL" ]; then
+        GIT_PART="${git_c#*|}"
+    else
+        if git -C "$DIR" rev-parse --git-dir > /dev/null 2>&1; then
+            BRANCH=$(git -C "$DIR" branch --show-current 2>/dev/null)
+            STAGED=$(git   -C "$DIR" diff --cached --numstat 2>/dev/null | wc -l | tr -d ' ')
+            MODIFIED=$(git -C "$DIR" diff --numstat 2>/dev/null | wc -l | tr -d ' ')
+            GIT_PART="Branch: 🌿 ${BRANCH}"
+            [ "$STAGED"   -gt 0 ] && GIT_PART="${GIT_PART} +${STAGED}"
+            [ "$MODIFIED" -gt 0 ] && GIT_PART="${GIT_PART} ~${MODIFIED}"
+            GIT_PART=" | ${GIT_PART}"
+        fi
+        [ -d "$CTX_DIR" ] || mkdir -p "$CTX_DIR"
+        printf '%s|%s' "$NOW" "$GIT_PART" > "$GIT_CACHE"
+    fi
 fi
 
 printf "[%s]%s | 💰 %s\n" "$MODEL" "$GIT_PART" "$COST_FMT"
