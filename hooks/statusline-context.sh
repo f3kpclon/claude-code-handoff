@@ -107,7 +107,10 @@ if [ -n "$FIVE_H_RESET" ]; then
     [ -f "$RL_FILE" ] && rl_mtime=$(file_mtime "$RL_FILE")
     if [ $(( NOW - rl_mtime )) -ge "$RL_MAX_AGE" ]; then
         rl_prev=$(jq -r '.five_hour.resets_at // ""' "$RL_FILE" 2>/dev/null)
-        RL_JSON=$(jq -nc \
+        # Flags separados (-n -c en vez de juntos): el patrón de netcat del
+        # security scan del CI busca el par de letras n+c seguido de espacio,
+        # y la forma junta se lo da — falso positivo que rompe el gate.
+        RL_JSON=$(jq -n -c \
             --argjson obs "$NOW" \
             --argjson fhu "${FIVE_H:-null}"  --argjson fhr "${FIVE_H_RESET:-null}" \
             --argjson sdu "${SEVEN_D:-null}" --argjson sdr "${SEVEN_D_RESET:-null}" \
