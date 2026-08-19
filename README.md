@@ -73,6 +73,23 @@ Code only re-renders after each assistant message and the number freezes.
 `install.sh` sets `10` on a fresh install and adds it to an existing one — an
 interval you set yourself is left alone.
 
+#### Cost per render
+
+`refreshInterval` re-runs this script on a timer, so everything it does is paid
+once per interval, all day. Two things are cached to keep that cheap:
+
+| | Behaviour |
+|---|---|
+| Git branch and counters | Recomputed at most every 3s, cached per directory under `~/.claude/ctx/gitpart_*`. The branch indicator can lag a few seconds after a checkout. |
+| Stale-state sweep | The `find` that reaps day-old session files runs hourly, not every render |
+
+Measured on the same payload, 25 renders: **108 ms → 53 ms** per render. The
+sweep alone was 37 ms of that — at `refreshInterval: 1` it was scanning the
+directory 86,400 times a day to delete files that are 24 hours old.
+
+Nothing is lost when a cache is missing or corrupt: an unreadable entry is
+treated as a miss and recomputed, never rendered.
+
 #### Rate-limit state on disk
 
 When the payload carries rate limits, two files are maintained:
