@@ -49,7 +49,41 @@ The status bar renders up to 4 lines depending on your plan:
 
 **Line 1** — always shown: active model ID, git branch + staged/modified count, session cost.  
 **Line 2** — always shown: session context window usage bar.  
-**Lines 3–4** — Pro/Max only: 5-hour rolling quota and 7-day weekly quota bars.
+**Lines 3–4** — Pro/Max only: 5-hour rolling quota and 7-day weekly quota bars.  
+**Line 5** — API key only: session spend against a budget you set (see below).
+
+#### Spend budget (API key)
+
+With an API key the payload arrives without `rate_limits`, so lines 3–4 disappear
+— and the limit stops being a window and starts being money. Set `COST_BUDGET` to
+your budget in dollars and line 5 shows what the session has spent against it:
+
+```
+💵 Presupuesto    🔥 [█████░░░░░] 55% — $55.50 / $100 — media sesión de presupuesto
+```
+
+The figure is `cost.total_cost_usd` from the status line payload — Claude Code's
+own number, not an estimate from a price table that would drift out of date.
+
+`COST_BUDGET=0` (the default) hides the line entirely: a percentage against an
+invented ceiling is worse than no percentage. The line also stays hidden when the
+payload *does* carry `rate_limits`, because on a subscription the cost is notional
+— what limits you there is the window, not the dollar.
+
+Going over budget is its own state, not one more band on the scale: the bar
+saturates but the percentage keeps climbing, so 118% never reads like 90%.
+
+**Presupuesto (API key) levels:**
+
+| Level | Emoji | Message |
+|-------|-------|---------|
+| < 30% | 😈 | recién parti'o, cero gasto |
+| 30–50% | 😎 | tranqui, hay billete |
+| 50–70% | 🔥 | media sesión de presupuesto |
+| 70–80% | 🔪 | ojo que se va la plata |
+| 80–90% | 💀 | casi sin presupuesto |
+| 90–100% | 🆘 | quedando pato, corta el chorro |
+| ≥ 100% | 🩸 | te pasaste del presupuesto weón |
 
 #### 5-hour countdown
 
@@ -212,7 +246,7 @@ Note: `THRESHOLDS` controls when the **dialog** fires; the statusline emoji band
 bash test.sh
 ```
 
-Verifies snapshot save logic, install idempotency, PreCompact behavior, statusline safety, monitor threshold/sentinel logic (with mocked dialogs), and CUSTOMIZE injection robustness. 41 assertions.
+Verifies snapshot save logic, install idempotency, PreCompact behavior, statusline safety, monitor threshold/sentinel logic (with mocked dialogs), spend-budget rendering, and CUSTOMIZE injection robustness. 72 assertions.
 
 ## Security
 
