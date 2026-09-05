@@ -28,6 +28,22 @@ RS70_DOT="👻"; RS70_MSG="ojo con el cupo semanal"
 RS50_DOT="🔥"; RS50_MSG="mitad de semana consumida"
 RS30_DOT="😎"; RS30_MSG="tranqui, semana larga"
 RS00_DOT="😈"; RS00_MSG="semana entera por delante"
+
+# Presupuesto de gasto (API key)
+# Con API key no hay ventanas de cupo: el payload llega sin rate_limits y las
+# dos líneas de arriba desaparecen. Ahí el límite no es tiempo, es plata, y sin
+# esto el statusline se queda mudo justo cuando el gasto sí importa.
+# En dólares. 0 = sin presupuesto — la línea no se pinta y todo sigue igual.
+COST_BUDGET=${COST_BUDGET:-0}
+# Pasarse del presupuesto es un estado distinto de estar cerca, no un tramo
+# más de la escala: merece su propio aviso o el 101% se lee igual que el 90%.
+CBX_DOT="🩸"; CBX_MSG="te pasaste del presupuesto weón"
+CB90_DOT="🆘"; CB90_MSG="quedando pato, corta el chorro"
+CB80_DOT="💀"; CB80_MSG="casi sin presupuesto"
+CB70_DOT="🔪"; CB70_MSG="ojo que se va la plata"
+CB50_DOT="🔥"; CB50_MSG="media sesión de presupuesto"
+CB30_DOT="😎"; CB30_MSG="tranqui, hay billete"
+CB00_DOT="😈"; CB00_MSG="recién parti'o, cero gasto"
 # ─────────────────────────────────────────────────────────────────────────────
 
 input=$(cat)
@@ -273,4 +289,40 @@ if [ -n "$SEVEN_D" ]; then
     else                              color="$GREEN";  dot="$RS00_DOT"; msg="$RS00_MSG"
     fi
     echo "📅 Cupo semanal   ${dot} ${color}[$(make_bar "$sd_int")] ${sd_int}% — ${msg}${RESET}"
+fi
+
+# ── Line 5: Presupuesto de la sesión — solo API key ──────────────────────────
+# Se pinta solo si hay presupuesto configurado Y el payload no trae cupos. Con
+# suscripción el costo es nocional — lo que te limita es la ventana, no el
+# dólar — así que una barra de presupuesto ahí estaría midiendo plata que no
+# se paga. Las dos condiciones juntas son lo que hace que esta línea aparezca
+# exactamente donde las de cupo no pueden.
+if [ "$COST_BUDGET" != "0" ] && [ -z "$FIVE_H" ] && [ -z "$SEVEN_D" ]; then
+    # Centavos vía printf y no un fork a awk/jq: bash no hace aritmética de
+    # decimales, pero su printf sí entiende notación científica, así que
+    # "12.34e2" da 1234 sin salir del proceso. El statusline corre en cada
+    # render; un fork por decimal se paga en latencia visible.
+    printf -v cost_c '%.0f' "${COST}e2"  2>/dev/null || cost_c=0
+    printf -v bud_c  '%.0f' "${COST_BUDGET}e2" 2>/dev/null || bud_c=0
+    case "$cost_c" in ''|*[!0-9]*) cost_c=0 ;; esac
+    case "$bud_c"  in ''|*[!0-9]*) bud_c=0  ;; esac
+
+    if [ "$bud_c" -gt 0 ]; then
+        cb_int=$(( cost_c * 100 / bud_c ))
+        # La barra se satura en 100 pero el porcentaje no: pasarse del
+        # presupuesto es justo el dato que hay que ver, y recortarlo a 100%
+        # borraría la diferencia entre ir justo y haberse pasado al doble.
+        cb_bar=$cb_int; [ "$cb_bar" -gt 100 ] && cb_bar=100
+        if   [ "$cb_int" -ge 100 ]; then color="$RED";   dot="$CBX_DOT"; msg="$CBX_MSG"
+        elif [ "$cb_int" -ge 90 ]; then color="$RED";    dot="$CB90_DOT"; msg="$CB90_MSG"
+        elif [ "$cb_int" -ge 80 ]; then color="$RED";    dot="$CB80_DOT"; msg="$CB80_MSG"
+        elif [ "$cb_int" -ge 70 ]; then color="$RED";    dot="$CB70_DOT"; msg="$CB70_MSG"
+        elif [ "$cb_int" -ge 50 ]; then color="$YELLOW"; dot="$CB50_DOT"; msg="$CB50_MSG"
+        elif [ "$cb_int" -ge 30 ]; then color="$GREEN";  dot="$CB30_DOT"; msg="$CB30_MSG"
+        else                              color="$GREEN";  dot="$CB00_DOT"; msg="$CB00_MSG"
+        fi
+        printf "💵 Presupuesto    %s %s[%s] %s%% — $%.2f / $%s — %s%s\n" \
+            "$dot" "$color" "$(make_bar "$cb_bar")" "$cb_int" \
+            "$COST" "$COST_BUDGET" "$msg" "$RESET"
+    fi
 fi

@@ -497,6 +497,65 @@ ca_run > /dev/null
 
 rm -rf "$CA_HOME"
 
+# ── Presupuesto de sesión (API key) ───────────────────────────────────────────
+echo ""
+echo "Presupuesto de sesión (API key)"
+
+# Payload de API key: sin bloque rate_limits, que es exactamente lo que
+# distingue una sesión con key de una con suscripción.
+sl_budget() {
+  printf '{"model":{"id":"o"},"workspace":{"current_dir":"/nonexistent-cb"},"cost":{"total_cost_usd":%s},"context_window":{"used_percentage":42},"session_id":"cb"}' "$1" \
+    | COST_BUDGET="$2" bash "$SL" 2>/dev/null
+}
+
+out=$(sl_budget 12.34 100)
+echo "$out" | grep -q '12%' \
+  && pass "el gasto de sesión se pinta como % del presupuesto" \
+  || fail "porcentaje de presupuesto mal calculado"
+# El gasto y el techo van literales al lado de la barra: un porcentaje solo no
+# dice si el 12% son doce dólares o doce centavos.
+# shellcheck disable=SC2016  # $100 es el literal que buscamos, no una expansión
+echo "$out" | grep -q '12.34 / \$100' \
+  && pass "muestra el monto gastado y el presupuesto" \
+  || fail "no muestra monto/presupuesto"
+
+# Sin presupuesto no hay línea: un porcentaje contra un techo inventado es peor
+# que no tener porcentaje.
+sl_budget 12.34 0 | grep -q 'Presupuesto' \
+  && fail "pintó la línea con COST_BUDGET=0" \
+  || pass "sin presupuesto configurado no se pinta la línea"
+
+# La regresión que importa: con suscripción el costo es nocional y el límite
+# real es la ventana. Si esta línea aparece ahí, está midiendo plata que nadie
+# paga.
+printf '{"model":{"id":"o"},"workspace":{"current_dir":"/nonexistent-cb"},"cost":{"total_cost_usd":40},"context_window":{"used_percentage":42},"session_id":"cb2","rate_limits":{"five_hour":{"used_percentage":83,"resets_at":%s}}}' "$(( $(date +%s) + 9000 ))" \
+  | COST_BUDGET=100 bash "$SL" 2>/dev/null | grep -q 'Presupuesto' \
+  && fail "pintó presupuesto en una sesión con rate_limits" \
+  || pass "no se pinta presupuesto cuando hay cupos (suscripción)"
+
+# Sobregiro: el porcentaje pasa de 100 pero la barra satura. Recortar el
+# número borraría la diferencia entre ir justo y haberse pasado al doble.
+out=$(sl_budget 118.75 100)
+echo "$out" | grep -q '118%' \
+  && pass "el sobregiro se reporta por encima de 100%" \
+  || fail "el porcentaje se recortó a 100"
+# Solo la línea de presupuesto: la de contexto también dibuja barra, y
+# `grep -c` cuenta líneas con coincidencia, no coincidencias.
+bar=$(echo "$out" | grep 'Presupuesto' | grep -c '░' || true)
+[ "$bar" = "0" ] \
+  && pass "la barra satura en lleno al pasarse" \
+  || fail "la barra dejó huecos con el presupuesto excedido"
+echo "$out" | grep -q 'te pasaste' \
+  && pass "el sobregiro tiene su propio aviso" \
+  || fail "el sobregiro reusa el mensaje del 90%"
+
+# Un cost ausente o basura no debe reventar la aritmética ni pintar un número
+# inventado — el statusline entero se caería con set -u sobre una variable rota.
+printf '{"model":{"id":"o"},"workspace":{"current_dir":"/nonexistent-cb"},"context_window":{"used_percentage":42},"session_id":"cb3"}' \
+  | COST_BUDGET=100 bash "$SL" 2>/dev/null | grep -q '0%' \
+  && pass "un payload sin cost no rompe la línea" \
+  || fail "payload sin cost rompió el presupuesto"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
