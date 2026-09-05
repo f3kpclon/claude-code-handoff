@@ -2,13 +2,44 @@
 # shellcheck disable=SC2016  # jq programs are single-quoted on purpose — $obs/$fhu are jq params, not shell vars
 # ── CUSTOMIZE ────────────────────────────────────────────────────────────────
 # Contexto de sesión
-L90_DOT="🆘"; L90_MSG="handoff altiro weón"
-L80_DOT="💀"; L80_MSG="¿qué hacíamos?"
-L70_DOT="🔪"; L70_MSG="me pase po"
-L60_DOT="👻"; L60_MSG="en cualquier momento me voy en la vola'"
-L50_DOT="🔥"; L50_MSG="se calienta la cosa"
-L30_DOT="😎"; L30_MSG="tranqui"
-L00_DOT="😈"; L00_MSG="listo mi guasho! estamo' entero activa'os"
+#
+# Los cortes NO son una escala decorativa de 10 en 10: están puestos donde la
+# evidencia dice que la calidad ya cayó, que es MUCHO antes de que se llene la
+# ventana. Resumen de por qué (fuentes en README → "Por qué estos cortes"):
+#   · NoLiMa (Adobe, ICML'25): 11 de 12 modelos caen bajo el 50% de su
+#     rendimiento de contexto corto YA EN 32k tokens, cuando la tarea exige
+#     inferencia y no calce literal. En 200k eso es el 16% de la barra.
+#   · Chroma "Context Rot" (18 modelos, incl. Opus 4 / Sonnet 4 / Haiku 3.5):
+#     la degradación es continua desde el primer incremento. No hay acantilado
+#     que esperar, hay una pendiente que ya vas bajando.
+#   · Agentes long-horizon: pérdida del objetivo original desde los ~10-15
+#     pasos. Una sesión de Claude Code pasa eso sin llegar al 40%.
+# Por eso el 🔥 arranca en 40 y no en 50, y el 💀 en 75 y no en 80.
+CTX_CRIT_DOT="🆘";  CTX_CRIT_MSG="handoff altiro weón"
+CTX_LOST_DOT="💀";  CTX_LOST_AT=75; CTX_LOST_MSG="¿qué hacíamos?"
+CTX_FADE_DOT="🔪";  CTX_FADE_AT=65; CTX_FADE_MSG="me pase po"
+CTX_DRIFT_DOT="👻"; CTX_DRIFT_AT=55; CTX_DRIFT_MSG="en cualquier momento me voy en la vola'"
+CTX_WARM_DOT="🔥";  CTX_WARM_AT=40; CTX_WARM_MSG="se calienta la cosa"
+CTX_OK_DOT="😎";    CTX_OK_AT=20;   CTX_OK_MSG="tranqui"
+CTX_FRESH_DOT="😈"; CTX_FRESH_MSG="listo mi guasho! estamo' entero activa'os"
+
+# Tokens que Claude Code reserva y NUNCA te deja usar: el auto-compact dispara
+# cuando quedan ~13k libres de una ventana efectiva que ya viene recortada
+# respecto de la anunciada. En 200k el compact cae en ~167k = 83,5% de la barra.
+#
+# Esto es lo que hacía que el tramo crítico fuera código muerto: estaba fijo en
+# 90, y en una ventana de 200k el 90 NO SE ALCANZA JAMÁS — la sesión se compacta
+# antes. El 🆘 no se pintó nunca. Ahora el corte se calcula desde el tamaño real
+# de ventana que trae el payload, así que también funciona en 1M.
+#
+# 33000 está verificado sólo para 200k (compact observado a 83-85% por varios
+# reportes independientes). Para 1M el reparto entre "ventana efectiva" y el
+# margen de 13k no está documentado: si ves que compacta antes de lo que marca
+# la barra, sube este número.
+CTX_RESERVE=${CTX_RESERVE:-33000}
+# Cuánto antes del compact se enciende el 🆘. Que avise justo cuando ya está
+# compactando no sirve de nada: para eso está el hook PreCompact.
+CTX_CRIT_MARGIN=${CTX_CRIT_MARGIN:-2}
 
 # Cupo horario (ventana 5h rolling)
 RH90_DOT="🆘"; RH90_MSG="quedando pato weón! al 100 no money no honey"
@@ -58,6 +89,7 @@ JQ_OUT=$(echo "$input" | jq -r '
   (.workspace.current_dir // .cwd // ""),
   (.cost.total_cost_usd // 0),
   (.context_window.used_percentage // ""),
+  (.context_window.context_window_size // 0),
   (.session_id // ""),
   (.rate_limits.five_hour.used_percentage  // ""),
   (.rate_limits.five_hour.resets_at        // ""),
@@ -73,6 +105,7 @@ JQ_OUT=$(echo "$input" | jq -r '
     IFS= read -r DIR
     IFS= read -r COST
     IFS= read -r used
+    IFS= read -r CTX_SIZE
     IFS= read -r SID
     IFS= read -r FIVE_H
     IFS= read -r FIVE_H_RESET
@@ -82,6 +115,24 @@ JQ_OUT=$(echo "$input" | jq -r '
 } <<< "$JQ_OUT"
 
 [ -z "$used" ] && exit 0
+
+# ── Punto de compactación ────────────────────────────────────────────────────
+# Porcentaje de la barra en el que Claude Code va a auto-compactar. Todo lo que
+# esté por encima es inalcanzable: no tiene sentido pintar tramos ahí.
+# Sin context_window_size (payload viejo) se cae al 83, que es el valor medido
+# en 200k — la ventana por defecto y el caso de lejos más común.
+case "$CTX_SIZE" in ''|*[!0-9]*) CTX_SIZE=0 ;; esac
+if [ "$CTX_SIZE" -gt "$CTX_RESERVE" ]; then
+    COMPACT_PCT=$(( (CTX_SIZE - CTX_RESERVE) * 100 / CTX_SIZE ))
+else
+    COMPACT_PCT=83
+fi
+# El 🆘 va justo debajo del compact, pero nunca puede colarse bajo el 💀: con
+# una ventana absurdamente chica el cálculo daría un crítico por debajo del
+# tramo anterior y la escala quedaría desordenada al revés.
+CTX_CRIT_AT=$(( COMPACT_PCT - CTX_CRIT_MARGIN ))
+[ "$CTX_CRIT_AT" -le "$CTX_LOST_AT" ] && CTX_CRIT_AT=$(( CTX_LOST_AT + 1 ))
+
 CTX_DIR="$HOME/.claude/ctx"
 # Legacy global file (kept for custom statuslines that integrate manually)
 echo "$used" > ~/.claude/ctx_pct.txt
@@ -91,6 +142,10 @@ if [ -n "$SID" ]; then
     # every run for a directory that already exists.
     [ -d "$CTX_DIR" ] || mkdir -p "$CTX_DIR"
     echo "$used" > "$CTX_DIR/$SID.pct"
+    # El monitor decide a qué % pedir handoff, pero sólo ve el .pct: sin esto no
+    # tiene cómo saber si la ventana es de 200k o de 1M, y sus umbrales fijos
+    # quedan o muy tarde (nunca disparan) o absurdamente temprano.
+    echo "$COMPACT_PCT" > "$CTX_DIR/$SID.compact"
     # Reap stale per-session state: pct files, handoff threshold sentinels and
     # abandoned git caches older than a day — sessions long gone.
     #
@@ -106,7 +161,7 @@ if [ -n "$SID" ]; then
         # Stamped BEFORE the sweep: if the find dies, the next run waits an hour
         # instead of retrying the expensive scan every single second.
         printf '%s' "$NOW" > "$HK"
-        find "$CTX_DIR" \( -name '*.pct' -o -name 'handoff_w*' -o -name 'gitpart_*' \) -mmin +1440 -delete 2>/dev/null
+        find "$CTX_DIR" \( -name '*.pct' -o -name '*.compact' -o -name 'handoff_w*' -o -name 'gitpart_*' \) -mmin +1440 -delete 2>/dev/null
     fi
 fi
 pct_int=$(( ${used%.*} ))
@@ -240,13 +295,15 @@ fi
 printf "[%s]%s | 💰 %s\n" "$MODEL" "$GIT_PART" "$COST_FMT"
 
 # ── Line 2: Contexto de sesión ────────────────────────────────────────────────
-if   [ "$pct_int" -ge 90 ]; then color="$RED";    dot="$L90_DOT"; msg="$L90_MSG"
-elif [ "$pct_int" -ge 80 ]; then color="$RED";    dot="$L80_DOT"; msg="$L80_MSG"
-elif [ "$pct_int" -ge 70 ]; then color="$RED";    dot="$L70_DOT"; msg="$L70_MSG"
-elif [ "$pct_int" -ge 60 ]; then color="$YELLOW"; dot="$L60_DOT"; msg="$L60_MSG"
-elif [ "$pct_int" -ge 50 ]; then color="$YELLOW"; dot="$L50_DOT"; msg="$L50_MSG"
-elif [ "$pct_int" -ge 30 ]; then color="$GREEN";  dot="$L30_DOT"; msg="$L30_MSG"
-else                              color="$GREEN";  dot="$L00_DOT"; msg="$L00_MSG"
+# El corte crítico es dinámico (ver CTX_CRIT_AT arriba); el resto son fijos y
+# están donde la evidencia dice, no repartidos de 10 en 10.
+if   [ "$pct_int" -ge "$CTX_CRIT_AT" ];  then color="$RED";    dot="$CTX_CRIT_DOT";  msg="$CTX_CRIT_MSG"
+elif [ "$pct_int" -ge "$CTX_LOST_AT" ];  then color="$RED";    dot="$CTX_LOST_DOT";  msg="$CTX_LOST_MSG"
+elif [ "$pct_int" -ge "$CTX_FADE_AT" ];  then color="$RED";    dot="$CTX_FADE_DOT";  msg="$CTX_FADE_MSG"
+elif [ "$pct_int" -ge "$CTX_DRIFT_AT" ]; then color="$YELLOW"; dot="$CTX_DRIFT_DOT"; msg="$CTX_DRIFT_MSG"
+elif [ "$pct_int" -ge "$CTX_WARM_AT" ];  then color="$YELLOW"; dot="$CTX_WARM_DOT";  msg="$CTX_WARM_MSG"
+elif [ "$pct_int" -ge "$CTX_OK_AT" ];    then color="$GREEN";  dot="$CTX_OK_DOT";    msg="$CTX_OK_MSG"
+else                                          color="$GREEN";  dot="$CTX_FRESH_DOT"; msg="$CTX_FRESH_MSG"
 fi
 echo "🧠 Contexto       ${dot} ${color}[$(make_bar "$pct_int")] ${pct_int}% — ${msg}${RESET}"
 

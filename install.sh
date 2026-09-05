@@ -8,7 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')
 
 # ── CUSTOMIZE ────────────────────────────────────────────────────────────────
-THRESHOLDS="70 80 90"
+# Dónde ofrecer el handoff. El último aviso NO va acá: se calcula solo contra el
+# punto de auto-compact real de la ventana (ver hooks/handoff-monitor.sh).
+THRESHOLDS="60 75"
 DIALOG_TITLE="Claude Code — Handoff"
 # shellcheck disable=SC2016
 DIALOG_MSG='Context at ${PCT_INT}% — generate handoff snapshot to continue in a new session?'

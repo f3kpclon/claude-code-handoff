@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # ── CUSTOMIZE ────────────────────────────────────────────────────────────────
-THRESHOLDS=(70 80 90)
+# Dónde ofrecer el handoff. Bajados desde (70 80 90) con evidencia: la calidad
+# empieza a caer mucho antes de que se llene la ventana, y el 90 era inalcanzable
+# en 200k porque el auto-compact dispara antes (~83%) — nunca disparó.
+# El último corte se recalcula solo contra el compact real: ver CRIT abajo.
+THRESHOLDS=(60 75)
 DIALOG_TITLE="Claude Code — Handoff"
 # shellcheck disable=SC2016  # ${PCT_INT} is a template token, substituted below
 DIALOG_MSG='Context at ${PCT_INT}% — generate handoff snapshot to continue in a new session?'
@@ -27,8 +31,24 @@ PCT=$(cat "$HOME/.claude/ctx/${SESSION}.pct" 2>/dev/null)
 [ -z "$PCT" ] && exit 0
 PCT_INT=$(( ${PCT%.*} ))
 
-THRESHOLD=0
+# ── Último aviso, anclado al compact real ────────────────────────────────────
+# La statusline deja el % de compactación de ESTA ventana en .compact (200k y
+# 1M compactan en puntos muy distintos). Un umbral por encima de ese punto no
+# dispara nunca — es exactamente el bug que tenía el 90 fijo — así que se
+# descartan los inalcanzables y se agrega uno 2 puntos antes del compact.
+# Sin el archivo (statusline no instalada) se usa 83, el valor medido en 200k.
+COMPACT_PCT=$(cat "$SENTINEL_DIR/${SESSION}.compact" 2>/dev/null)
+case "$COMPACT_PCT" in ''|*[!0-9]*) COMPACT_PCT=83 ;; esac
+CRIT=$(( COMPACT_PCT - 2 ))
+
+USABLE=()
 for LEVEL in "${THRESHOLDS[@]}"; do
+  [ "$LEVEL" -lt "$CRIT" ] && USABLE+=("$LEVEL")
+done
+USABLE+=("$CRIT")
+
+THRESHOLD=0
+for LEVEL in "${USABLE[@]}"; do
   if [ "$PCT_INT" -ge "$LEVEL" ] && [ ! -f "$SENTINEL_DIR/handoff_w${LEVEL}_${SESSION}" ]; then
     THRESHOLD=$LEVEL
     break

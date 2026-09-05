@@ -14,6 +14,30 @@ REPO_NAME=$(basename "$CWD")
 HDIR="$HOME/.claude/handoffs/$REPO_NAME"
 mkdir -p "$HDIR"
 
+# ── Medir el umbral de compactación real ─────────────────────────────────────
+# Los cortes de contexto se calibran contra un punto de compact (~83% en 200k)
+# que Anthropic NO documenta: sale de código deobfuscado por terceros, y hay
+# reportes que se contradicen (95% en dic-2025 vs 83,5% en mar-2026). Calibrar
+# contra un número que nadie puede verificar es exactamente el proxy que hay
+# que evitar cuando el juez real está disponible.
+#
+# Y acá lo está: este hook corre JUSTO cuando la compactación va a ocurrir, así
+# que el último used_percentage que alcanzó a escribir la statusline ES el
+# umbral, observado y no inferido. Una línea por evento, para poder ajustar
+# CTX_RESERVE con dato propio en vez de con un despeje.
+#
+# Nunca puede tumbar el hook: todo va a /dev/null y el snapshot sigue igual.
+{
+    SID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
+    if [ -n "$SID" ] && [ -f "$HOME/.claude/ctx/$SID.pct" ]; then
+        OBS_PCT=$(cat "$HOME/.claude/ctx/$SID.pct" 2>/dev/null)
+        OBS_COMPACT=$(cat "$HOME/.claude/ctx/$SID.compact" 2>/dev/null)
+        printf '%s\tobserved=%s\tpredicted=%s\n' \
+            "$(date '+%Y-%m-%d %H:%M')" "${OBS_PCT:-?}" "${OBS_COMPACT:-?}" \
+            >> "$HOME/.claude/ctx/compact-observed.tsv"
+    fi
+} 2>/dev/null || true
+
 TS=$(date '+%Y-%m-%d_%H%M')
 DATE=$(date '+%Y-%m-%d %H:%M')
 

@@ -129,6 +129,31 @@ REPO_NAME=$(basename "$FAKE_REPO")
 [ -s "$FAKE_HOME/.claude/handoffs/$REPO_NAME/latest.md" ] \
   && pass "mini-snapshot is non-empty"                || fail "mini-snapshot is empty"
 
+# ── Sonda: el umbral de compact medido, no inferido ──────────────────────────
+# El hook corre justo cuando se compacta, así que el último .pct ES el umbral.
+# Es lo que permite calibrar CTX_RESERVE con dato observado.
+mkdir -p "$FAKE_HOME/.claude/ctx"
+echo "84.2" > "$FAKE_HOME/.claude/ctx/probe.pct"
+echo "83"   > "$FAKE_HOME/.claude/ctx/probe.compact"
+PROBE_IN=$(python3 -c "import json; print(json.dumps({'cwd': '$FAKE_REPO', 'session_id': 'probe'}))")
+echo "$PROBE_IN" | HOME="$FAKE_HOME" bash "$SCRIPT_DIR/hooks/pre-compact.sh" > /dev/null 2>&1
+OBSERVED="$FAKE_HOME/.claude/ctx/compact-observed.tsv"
+[ -f "$OBSERVED" ] \
+  && pass "compact real registrado al dispararse el hook" || fail "no se registró la observación"
+grep -q "observed=84.2" "$OBSERVED" 2>/dev/null \
+  && pass "guarda el % observado (juez real)"             || fail "% observado ausente: $(cat "$OBSERVED" 2>/dev/null)"
+grep -q "predicted=83" "$OBSERVED" 2>/dev/null \
+  && pass "guarda el % predicho, para contrastar"         || fail "% predicho ausente"
+
+# Sin session_id la sonda se calla, pero el snapshot debe salir igual: medir
+# nunca puede costar una compactación.
+LINES_BEFORE=$(wc -l < "$OBSERVED")
+NOSID_IN=$(python3 -c "import json; print(json.dumps({'cwd': '$FAKE_REPO'}))")
+echo "$NOSID_IN" | HOME="$FAKE_HOME" bash "$SCRIPT_DIR/hooks/pre-compact.sh" > /dev/null 2>&1 \
+  && pass "sin session_id el hook sigue saliendo 0"       || fail "la sonda tumbó el hook"
+[ "$(wc -l < "$OBSERVED")" -eq "$LINES_BEFORE" ] \
+  && pass "sin datos no inventa una medición"             || fail "escribió una observación sin fuente"
+
 rm -rf "$FAKE_HOME" "$FAKE_REPO"
 
 # ── Test 5: install.sh hook verification ─────────────────────────────────────
@@ -196,7 +221,7 @@ SID="handofftest$$"
 mkdir -p "$FAKE_HOME/.claude/ctx"
 # Sentinels now live in $HOME/.claude/ctx (not /tmp) — FAKE_HOME is fresh, so no
 # cross-run contamination. Clear any legacy /tmp leftovers from older versions.
-rm -f "/tmp/handoff_w70_$SID" "/tmp/handoff_w80_$SID" "/tmp/handoff_w90_$SID"
+rm -f "/tmp/handoff_w60_$SID" "/tmp/handoff_w75_$SID" "/tmp/handoff_w81_$SID"
 
 # Fake dialog binaries so no real dialog pops on any platform:
 # darwin branch calls osascript, linux branch calls zenity.
@@ -222,45 +247,106 @@ echo "50" > "$FAKE_HOME/.claude/ctx/$SID.pct"
 OUT=$(run_monitor)
 [ -z "$OUT" ] && pass "below threshold → silence" || fail "output below threshold: $OUT"
 
-echo "72" > "$FAKE_HOME/.claude/ctx/$SID.pct"
+echo "62" > "$FAKE_HOME/.claude/ctx/$SID.pct"
 OUT=$(run_monitor)
 echo "$OUT" | grep -q "HANDOFF REQUESTED" \
-  && pass "70% + Yes → block with HANDOFF REQUESTED" || fail "no block at 70%: $OUT"
+  && pass "60% + Yes → block with HANDOFF REQUESTED" || fail "no block at 60%: $OUT"
 
 # Sentinel written under ~/.claude/ctx (owned, not world-writable) — NOT /tmp
-[ -f "$FAKE_HOME/.claude/ctx/handoff_w70_$SID" ] \
+[ -f "$FAKE_HOME/.claude/ctx/handoff_w60_$SID" ] \
   && pass "sentinel in ~/.claude/ctx (not /tmp)" || fail "sentinel not in ctx dir"
-[ ! -f "/tmp/handoff_w70_$SID" ] \
+[ ! -f "/tmp/handoff_w60_$SID" ] \
   && pass "no sentinel leaked to /tmp"           || fail "sentinel still written to /tmp"
 
 OUT=$(run_monitor)
-[ -z "$OUT" ] && pass "70% alert consumed — no repeat" || fail "alert repeated at same level: $OUT"
+[ -z "$OUT" ] && pass "60% alert consumed — no repeat" || fail "alert repeated at same level: $OUT"
 
-echo "85" > "$FAKE_HOME/.claude/ctx/$SID.pct"
+echo "76" > "$FAKE_HOME/.claude/ctx/$SID.pct"
 OUT=$(run_monitor)
 echo "$OUT" | grep -q "HANDOFF REQUESTED" \
-  && pass "next threshold (80%) fires again" || fail "80% threshold did not fire: $OUT"
+  && pass "next threshold (75%) fires again" || fail "75% threshold did not fire: $OUT"
 
 make_dialogs No
-echo "95" > "$FAKE_HOME/.claude/ctx/$SID.pct"
+echo "82" > "$FAKE_HOME/.claude/ctx/$SID.pct"
 OUT=$(run_monitor)
-[ -z "$OUT" ] && pass "90% + No → no block" || fail "block emitted after No: $OUT"
+[ -z "$OUT" ] && pass "critical + No → no block" || fail "block emitted after No: $OUT"
 
 make_dialogs Yes
 OUT=$(run_monitor)
-[ -z "$OUT" ] && pass "No consumed the 90% alert" || fail "90% alert re-fired after No: $OUT"
+[ -z "$OUT" ] && pass "No consumed the critical alert" || fail "critical alert re-fired after No: $OUT"
+
+# ── Techo dinámico: el último aviso se ancla al compact, no a un 90 fijo ─────
+# Regresión del bug que motivó la recalibración: con ventana de 200k el compact
+# cae en ~83%, así que un umbral en 90 no dispara NUNCA. El aviso crítico tiene
+# que caer por debajo del compact de la ventana que esté en uso.
+# Los tramos fijos se dan por consumidos para aislar el ÚLTIMO aviso, que es el
+# que se calcula: el monitor escala de a un nivel por Stop, así que sin esto
+# siempre respondería el 60 y el crítico no se ejercitaría nunca.
+seed_fixed() {
+  touch "$FAKE_HOME/.claude/ctx/handoff_w60_$1" "$FAKE_HOME/.claude/ctx/handoff_w75_$1"
+}
+
+SID3="handofftest3$$"
+INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID3" "$PWD")
+seed_fixed "$SID3"
+echo "82" > "$FAKE_HOME/.claude/ctx/$SID3.pct"
+echo "83" > "$FAKE_HOME/.claude/ctx/$SID3.compact"     # ventana de 200k → crít 81
+OUT=$(run_monitor)
+echo "$OUT" | grep -q "HANDOFF REQUESTED" \
+  && pass "200k: crítico dispara bajo el compact (82 ≥ 81)" || fail "crítico no disparó en 200k: $OUT"
+[ -f "$FAKE_HOME/.claude/ctx/handoff_w81_$SID3" ] \
+  && pass "200k: el sentinel usa el corte calculado (81), no un 90 fijo" || fail "sentinel w81 ausente"
+
+# El contraste que justifica todo el cambio: MISMO 82% de contexto, y el
+# veredicto se invierte según el tamaño de ventana. Con el 90 fijo anterior,
+# 200k no avisaba nunca y 1M avisaba tardísimo — el mismo número para dos
+# físicas distintas.
+SID4="handofftest4$$"
+INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID4" "$PWD")
+seed_fixed "$SID4"
+echo "82" > "$FAKE_HOME/.claude/ctx/$SID4.pct"
+echo "96" > "$FAKE_HOME/.claude/ctx/$SID4.compact"     # ventana de 1M → crít 94
+OUT=$(run_monitor)
+[ -z "$OUT" ] && pass "1M: 82% todavía NO es crítico (compact está en 96)" \
+              || fail "crítico disparó antes de tiempo en 1M: $OUT"
+
+echo "95" > "$FAKE_HOME/.claude/ctx/$SID4.pct"
+OUT=$(run_monitor)
+echo "$OUT" | grep -q "HANDOFF REQUESTED" \
+  && pass "1M: el crítico se corre solo hasta 94" || fail "crítico no disparó a 95% en 1M: $OUT"
+
+# .compact ausente (statusline no instalada) → 83, el valor medido en 200k
+SID5="handofftest5$$"
+INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID5" "$PWD")
+seed_fixed "$SID5"
+echo "82" > "$FAKE_HOME/.claude/ctx/$SID5.pct"
+OUT=$(run_monitor)
+echo "$OUT" | grep -q "HANDOFF REQUESTED" \
+  && pass "sin .compact → cae al default de 200k" || fail "fallback de compact roto: $OUT"
+
+# Un .compact corrupto no puede reventar la aritmética ni inventar un umbral
+SID6="handofftest6$$"
+INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID6" "$PWD")
+seed_fixed "$SID6"
+echo "82" > "$FAKE_HOME/.claude/ctx/$SID6.pct"
+printf 'no-soy-un-numero' > "$FAKE_HOME/.claude/ctx/$SID6.compact"
+OUT=$(run_monitor 2>&1)
+echo "$OUT" | grep -q "HANDOFF REQUESTED" \
+  && pass ".compact corrupto → cae al default sin reventar" || fail "compact corrupto rompió el monitor: $OUT"
+
+INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID" "$PWD")
 
 # per-session pct: another session's percentage must not trigger this session
 SID2="handofftest2$$"
-rm -f "/tmp/handoff_w70_$SID2" "/tmp/handoff_w80_$SID2" "/tmp/handoff_w90_$SID2"
+rm -f "/tmp/handoff_w60_$SID2" "/tmp/handoff_w75_$SID2" "/tmp/handoff_w81_$SID2"
 echo "10" > "$FAKE_HOME/.claude/ctx/$SID2.pct"
 echo "99" > "$FAKE_HOME/.claude/ctx/$SID.pct"
 INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID2" "$PWD")
 OUT=$(run_monitor)
 [ -z "$OUT" ] && pass "session reads its own pct (no cross-session trigger)" || fail "cross-session pct leak: $OUT"
 
-rm -f /tmp/handoff_w70_"$SID"* /tmp/handoff_w80_"$SID"* /tmp/handoff_w90_"$SID"* \
-      "/tmp/handoff_w70_$SID2" "/tmp/handoff_w80_$SID2" "/tmp/handoff_w90_$SID2"
+rm -f /tmp/handoff_w60_"$SID"* /tmp/handoff_w75_"$SID"* /tmp/handoff_w81_"$SID"* \
+      "/tmp/handoff_w60_$SID2" "/tmp/handoff_w75_$SID2" "/tmp/handoff_w81_$SID2"
 rm -rf "$FAKE_HOME" "$FAKE_BIN"
 
 # ── Test 8: CUSTOMIZE injection robustness (sed→python3) ─────────────────────
