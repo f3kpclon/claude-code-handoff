@@ -220,7 +220,7 @@ Edit the `# ── CUSTOMIZE` block in `install.sh` before installing — values
 
 ```bash
 # ── CUSTOMIZE ────────────────────────────────────────────────────────────────
-THRESHOLDS="70 80 90"
+THRESHOLDS="60 75"   # el último aviso se calcula solo (ver abajo)
 DIALOG_TITLE="Claude Code — Handoff"
 DIALOG_MSG='Context at ${PCT_INT}% — generate handoff snapshot to continue in a new session?'
 CONFIRM_MSG="💾 listo mi shan!! guarda'o el handoff"
@@ -234,11 +234,51 @@ To change after installing, edit the `# ── CUSTOMIZE` block in each file und
 | Dialog title | `hooks/handoff-monitor.sh` | `DIALOG_TITLE` |
 | Dialog message | `hooks/handoff-monitor.sh` | `DIALOG_MSG` |
 | Confirmation message | `skills/handoff/SKILL.md` | line starting with `💾` |
-| Contexto bar emoji + text | `hooks/statusline-context.sh` | `L90_DOT`, `L90_MSG`, etc. |
+| Contexto bar emoji + text | `hooks/statusline-context.sh` | `CTX_CRIT_DOT`, `CTX_CRIT_MSG`, etc. |
+| Contexto band cut points | `hooks/statusline-context.sh` | `CTX_LOST_AT`, `CTX_FADE_AT`, etc. |
+| Compaction reserve (tokens) | `hooks/statusline-context.sh` | `CTX_RESERVE` |
 | Hourly quota emoji + text | `hooks/statusline-context.sh` | `RH90_DOT`, `RH90_MSG`, etc. |
 | Weekly quota emoji + text | `hooks/statusline-context.sh` | `RS90_DOT`, `RS90_MSG`, etc. |
 
-Note: `THRESHOLDS` controls when the **dialog** fires; the statusline emoji bands (30/50/60/70/80/90) are display-only and independent — changing one does not change the other.
+### Why these cut points
+
+The bands are not a decorative 10-by-10 scale. They sit where the evidence says
+quality has already dropped, which is well before the window fills up.
+
+| Finding | Source | Confidence |
+|---|---|---|
+| 11 of 12 models fall below 50% of their short-context baseline **at 32k tokens** once the task needs inference instead of literal matching | [NoLiMa](https://arxiv.org/pdf/2502.05167) (Adobe Research, ICML 2025) | verified — peer reviewed |
+| Degradation is continuous from the first length increment across 18 models (Opus 4, Sonnet 4, Haiku 3.5 included). There is no cliff to wait for | [Context Rot](https://www.trychroma.com/research/context-rot) (Chroma) | verified — published study |
+| Finite "attention budget", n² pairwise relations, training skewed to short sequences → *"a performance gradient rather than a sharp cliff"* | [Anthropic](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) | verified — first-party |
+| `used_percentage` is a share of the **advertised** window (`context_window_size`: 200000, or 1000000 extended) | [statusline docs](https://code.claude.com/docs/en/statusline) | verified — first-party |
+| Long-horizon agents lose the original goal from ~10-15 steps | [arXiv 2606.29718](https://arxiv.org/pdf/2606.29718) | plausible — preprint |
+| Auto-compaction fires around 83.5% on a 200k window (`effectiveWindow − 13000`) | deobfuscated code in [issue #31806](https://github.com/anthropics/claude-code/issues/31806) | **plausible — not first-party** |
+
+That last row is the weak one, and it carries `CTX_RESERVE`. Anthropic documents
+no compaction threshold anywhere, and the community reports disagree: [issue
+#15719](https://github.com/anthropics/claude-code/issues/15719) (Dec 2025) claims a
+hardcoded 95%, [#31806](https://github.com/anthropics/claude-code/issues/31806)
+(Mar 2026) claims ~83.5%. Both were closed as duplicates with no maintainer
+reply. Probably a change between those dates — but that is a guess, not a fact.
+
+`CTX_RESERVE=33000` is derived from the 83.5% figure, not quoted from a source.
+Two things keep that honest:
+
+- **It fails loudly, not silently.** If the real threshold is higher, the 🆘 band
+  fires early — annoying but visible. The previous fixed `90` did the opposite:
+  on a 200k window auto-compaction hit first, so that band *never rendered once*.
+- **It measures itself.** `pre-compact.sh` runs exactly when compaction happens,
+  so the last `used_percentage` on disk **is** the threshold. Every event appends
+  a line to `~/.claude/ctx/compact-observed.tsv`:
+
+  ```
+  2026-09-05 19:16	observed=84.2	predicted=83
+  ```
+
+  After a few compactions, tune `CTX_RESERVE` from your own `observed` column
+  instead of from anyone's blog post.
+
+Note: `THRESHOLDS` controls when the **dialog** fires; the statusline emoji bands (20/40/55/65/75 + a computed critical band) are display-only and independent — changing one does not change the other.
 
 ## Test
 
@@ -246,7 +286,7 @@ Note: `THRESHOLDS` controls when the **dialog** fires; the statusline emoji band
 bash test.sh
 ```
 
-Verifies snapshot save logic, install idempotency, PreCompact behavior, statusline safety, monitor threshold/sentinel logic (with mocked dialogs), spend-budget rendering, and CUSTOMIZE injection robustness. 72 assertions.
+Verifies snapshot save logic, install idempotency, PreCompact behavior, statusline safety, monitor threshold/sentinel logic (with mocked dialogs), the dynamic compaction ceiling, spend-budget rendering, and CUSTOMIZE injection robustness. 83 assertions.
 
 ## Security
 
