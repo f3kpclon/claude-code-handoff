@@ -483,6 +483,55 @@ done < "$SL_HIST"
 jq -e . "$SL_RL" > /dev/null 2>&1 \
   && pass "ratelimit.json is valid JSON" || fail "ratelimit.json is malformed"
 
+# ── Higiene: la suite no puede tocar el ~/.claude real ───────────────────────
+# El statusline escribe estado de contexto a disco en cada corrida. Sin HOME
+# fijado, `bash test.sh` sobrescribía ~/.claude/ctx_pct.txt del usuario con el
+# valor de un payload de prueba — y ese archivo lo leen los hooks que deciden
+# cuándo ofrecer un handoff. Correr los tests podía disparar un diálogo falso o
+# tapar uno real, sin dejar rastro de por qué.
+LEAK_HOME=$(mktemp -d); mkdir -p "$LEAK_HOME/.claude"
+REAL_CTX_BEFORE=$(cat "$HOME/.claude/ctx_pct.txt" 2>/dev/null || echo "__none__")
+printf '{"model":{"id":"o"},"workspace":{"current_dir":"/nonexistent-leak"},"cost":{"total_cost_usd":1},"context_window":{"used_percentage":97},"session_id":"leakprobe"}' \
+  | HOME="$LEAK_HOME" COST_BUDGET=100 bash "$SL" > /dev/null 2>&1
+REAL_CTX_AFTER=$(cat "$HOME/.claude/ctx_pct.txt" 2>/dev/null || echo "__none__")
+[ "$REAL_CTX_BEFORE" = "$REAL_CTX_AFTER" ] \
+  && pass "la suite no pisa el ctx_pct.txt real" || fail "el test escribió en el HOME real: $REAL_CTX_BEFORE -> $REAL_CTX_AFTER"
+[ ! -f "$HOME/.claude/ctx/leakprobe.pct" ] \
+  && pass "no deja estado de sesión en el ~/.claude real" || fail "leakprobe.pct quedó en el HOME real"
+[ -f "$LEAK_HOME/.claude/ctx/leakprobe.pct" ] \
+  && pass "el estado va al HOME de prueba" || fail "no escribió en el HOME de prueba"
+rm -rf "$LEAK_HOME"
+
+# Lo anterior prueba que el hook respeta HOME, no que la suite se lo pase. Este
+# guard es el que caza la reintroducción: cualquier invocación del statusline
+# sin HOME vuelve a escribir en el ~/.claude real, que es como entró el bug.
+# Se excluyen los comentarios y las propias líneas de conteo: si no, el guard
+# se cuenta a sí mismo (su patrón aparece literal acá) y falla siempre.
+# shellcheck disable=SC2016  # el patrón se busca literal en el archivo, no se expande
+SL_CALLS=$(grep 'bash "$SL"' "$SCRIPT_DIR/test.sh" | grep -v '^[[:space:]]*#' | grep -v 'grep ')
+SL_TOTAL=$(printf '%s\n' "$SL_CALLS" | grep -c . || true)
+SL_CON_HOME=$(printf '%s\n' "$SL_CALLS" | grep -c 'HOME=' || true)
+[ "$SL_TOTAL" -eq "$SL_CON_HOME" ] \
+  && pass "toda invocación del statusline fija HOME ($SL_CON_HOME/$SL_TOTAL)" \
+  || fail "hay $(( SL_TOTAL - SL_CON_HOME )) invocación(es) de statusline sin HOME — escriben en el ~/.claude real"
+
+# ── El installer no puede mentir sobre sus propios umbrales ──────────────────
+# Regresión real: install.sh inyectaba THRESHOLDS="60 75" y dos líneas más abajo
+# anunciaba "At 70/80/90%" en texto fijo. El usuario lee el número viejo y el
+# installer suena igual de seguro. Ahora se deriva de la variable — esto lo
+# verifica contra la salida de verdad, no contra el código fuente.
+INST_HOME=$(mktemp -d)
+INST_OUT=$(HOME="$INST_HOME" bash "$SCRIPT_DIR/install.sh" 2>&1)
+INST_THRESHOLDS=$(grep -m1 '^THRESHOLDS=' "$SCRIPT_DIR/install.sh" | sed 's/.*"\(.*\)".*/\1/')
+INST_EXPECTED="${INST_THRESHOLDS// //}"
+echo "$INST_OUT" | grep -q "At ${INST_EXPECTED}%" \
+  && pass "el installer anuncia los umbrales que realmente instala ($INST_EXPECTED)" \
+  || fail "la prosa del installer no coincide con THRESHOLDS=$INST_THRESHOLDS"
+echo "$INST_OUT" | grep -q "thresholds: ${INST_THRESHOLDS}" \
+  && pass "la confirmación de instalación cita los mismos umbrales" \
+  || fail "el resumen de instalación cita otros umbrales"
+rm -rf "$INST_HOME"
+
 rm -rf "$SL_HOME"
 
 # ── Test 10: install.sh registers refreshInterval ────────────────────────────
@@ -591,7 +640,7 @@ echo "Presupuesto de sesión (API key)"
 # distingue una sesión con key de una con suscripción.
 sl_budget() {
   printf '{"model":{"id":"o"},"workspace":{"current_dir":"/nonexistent-cb"},"cost":{"total_cost_usd":%s},"context_window":{"used_percentage":42},"session_id":"cb"}' "$1" \
-    | COST_BUDGET="$2" bash "$SL" 2>/dev/null
+    | HOME="$SL_HOME" COST_BUDGET="$2" bash "$SL" 2>/dev/null
 }
 
 out=$(sl_budget 12.34 100)
@@ -615,7 +664,7 @@ sl_budget 12.34 0 | grep -q 'Presupuesto' \
 # real es la ventana. Si esta línea aparece ahí, está midiendo plata que nadie
 # paga.
 printf '{"model":{"id":"o"},"workspace":{"current_dir":"/nonexistent-cb"},"cost":{"total_cost_usd":40},"context_window":{"used_percentage":42},"session_id":"cb2","rate_limits":{"five_hour":{"used_percentage":83,"resets_at":%s}}}' "$(( $(date +%s) + 9000 ))" \
-  | COST_BUDGET=100 bash "$SL" 2>/dev/null | grep -q 'Presupuesto' \
+  | HOME="$SL_HOME" COST_BUDGET=100 bash "$SL" 2>/dev/null | grep -q 'Presupuesto' \
   && fail "pintó presupuesto en una sesión con rate_limits" \
   || pass "no se pinta presupuesto cuando hay cupos (suscripción)"
 
@@ -638,7 +687,7 @@ echo "$out" | grep -q 'te pasaste' \
 # Un cost ausente o basura no debe reventar la aritmética ni pintar un número
 # inventado — el statusline entero se caería con set -u sobre una variable rota.
 printf '{"model":{"id":"o"},"workspace":{"current_dir":"/nonexistent-cb"},"context_window":{"used_percentage":42},"session_id":"cb3"}' \
-  | COST_BUDGET=100 bash "$SL" 2>/dev/null | grep -q '0%' \
+  | HOME="$SL_HOME" COST_BUDGET=100 bash "$SL" 2>/dev/null | grep -q '0%' \
   && pass "un payload sin cost no rompe la línea" \
   || fail "payload sin cost rompió el presupuesto"
 

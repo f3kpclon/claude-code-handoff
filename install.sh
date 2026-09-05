@@ -253,7 +253,10 @@ echo "Done. Restart Claude Code to activate."
 echo ""
 echo "What to expect:"
 echo "  • Status bar shows context usage on every response"
-echo "  • At 70/80/90% a dialog asks to generate a snapshot"
+# Derivado de $THRESHOLDS, NO escrito a mano: este texto ya quedó mintiendo una
+# vez (decía 70/80/90 después de que los cortes bajaran a 60/75) y nadie se
+# entera, porque el installer imprime igual de convencido con el número viejo.
+echo "  • At ${THRESHOLDS// //}% — and again just before auto-compaction — a dialog asks to generate a snapshot"
 echo "  • At context limit PreCompact saves a snapshot and allows compaction to continue"
 echo "  • Snapshots saved to ~/.claude/handoffs/{repo-name}/ — outside the repo, never committable"
 echo "  • latest.md always available for quick access"
