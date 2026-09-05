@@ -286,7 +286,7 @@ Note: `THRESHOLDS` controls when the **dialog** fires; the statusline emoji band
 bash test.sh
 ```
 
-Verifies snapshot save logic, install idempotency, PreCompact behavior, statusline safety, monitor threshold/sentinel logic (with mocked dialogs), the dynamic compaction ceiling, spend-budget rendering, and CUSTOMIZE injection robustness. 89 assertions.
+Verifies snapshot save logic, install idempotency, PreCompact behavior, statusline safety, monitor threshold/sentinel logic (with mocked dialogs), the dynamic compaction ceiling, spend-budget rendering, and CUSTOMIZE injection robustness. 90 assertions.
 
 ## Security
 

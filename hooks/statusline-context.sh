@@ -161,7 +161,7 @@ if [ -n "$SID" ]; then
         # Stamped BEFORE the sweep: if the find dies, the next run waits an hour
         # instead of retrying the expensive scan every single second.
         printf '%s' "$NOW" > "$HK"
-        find "$CTX_DIR" \( -name '*.pct' -o -name '*.compact' -o -name 'handoff_w*' -o -name 'gitpart_*' \) -mmin +1440 -delete 2>/dev/null
+        find "$CTX_DIR" \( -name '*.pct' -o -name '*.compact' -o -name 'handoff_w*' -o -name 'effort_w*' -o -name 'gitpart_*' \) -mmin +1440 -delete 2>/dev/null
     fi
 fi
 pct_int=$(( ${used%.*} ))
