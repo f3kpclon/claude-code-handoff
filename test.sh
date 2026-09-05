@@ -618,10 +618,20 @@ echo "$CA_OUT" | grep -q 'garbage' \
 
 # Housekeeping: the sweep still deletes day-old state when the stamp is stale...
 touch -t 200001010000 "$CA_CTX/zombie.pct"
+# Un sentinel por cada prefijo que el barrido dice cubrir. Si alguien agrega un
+# tipo de archivo de sesión y se olvida del glob, se acumula para siempre en el
+# ~/.claude del usuario y nadie se entera: no rompe nada, solo crece.
+touch -t 200001010000 "$CA_CTX/zombie.compact" "$CA_CTX/handoff_w60_zombie" \
+                      "$CA_CTX/effort_w50_zombie" "$CA_CTX/gitpart_zombie"
 printf '%s' "0" > "$CA_CTX/.housekeeping"
 ca_run > /dev/null
 [ -f "$CA_CTX/zombie.pct" ] \
   && fail "stale stamp did not trigger the sweep" || pass "stale stamp triggers the sweep"
+CA_LEFT=$(find "$CA_CTX" \( -name 'zombie.compact' -o -name 'handoff_w60_zombie' \
+                          -o -name 'effort_w50_zombie' -o -name 'gitpart_zombie' \) 2>/dev/null | wc -l | tr -d ' ')
+[ "$CA_LEFT" -eq 0 ] \
+  && pass "el barrido cubre todos los prefijos de estado de sesión" \
+  || fail "$CA_LEFT archivo(s) de sesión sobrevivieron al barrido"
 
 # ...and is skipped while the stamp is fresh, which is the whole point.
 touch -t 200001010000 "$CA_CTX/zombie2.pct"
