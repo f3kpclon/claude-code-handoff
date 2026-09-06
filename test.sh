@@ -315,6 +315,38 @@ OUT=$(run_monitor)
 echo "$OUT" | grep -q "HANDOFF REQUESTED" \
   && pass "1M: el crítico se corre solo hasta 94" || fail "crítico no disparó a 95% en 1M: $OUT"
 
+# ── El monitor sigue a la barra: cortes por token también acá ───────────────
+# Si el statusline dice que degradaste a los 200k tokens de una ventana de 1M,
+# el handoff no puede esperar al 60% (= 600,000 tokens). Sería avisar cuatro
+# veces tarde justo en la ventana donde más se nota.
+SID7="handofftest7$$"
+INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID7" "$PWD")
+echo "20" > "$FAKE_HOME/.claude/ctx/$SID7.pct"       # 20% — muy lejos del 60
+echo "96" > "$FAKE_HOME/.claude/ctx/$SID7.compact"   # ventana de 1M
+echo "200000" > "$FAKE_HOME/.claude/ctx/$SID7.tok"   # pero 200k tokens
+OUT=$(run_monitor)
+echo "$OUT" | grep -q "HANDOFF REQUESTED" \
+  && pass "1M: 200k tokens ofrece handoff pese a ir en 20%" \
+  || fail "el monitor ignoró los tokens: $OUT"
+
+# Y no al revés: pocos tokens no pueden disparar sólo por el porcentaje bajo.
+SID8="handofftest8$$"
+INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID8" "$PWD")
+echo "20" > "$FAKE_HOME/.claude/ctx/$SID8.pct"
+echo "96" > "$FAKE_HOME/.claude/ctx/$SID8.compact"
+echo "50000" > "$FAKE_HOME/.claude/ctx/$SID8.tok"
+OUT=$(run_monitor)
+[ -z "$OUT" ] && pass "1M: 50k tokens al 20% no molesta" || fail "disparó sin motivo: $OUT"
+
+# Sin .tok (statusline vieja) los cortes por token no participan y manda el
+# porcentaje — degradar a silencio es peor que degradar al comportamiento viejo.
+SID9="handofftest9$$"
+INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID9" "$PWD")
+echo "62" > "$FAKE_HOME/.claude/ctx/$SID9.pct"
+OUT=$(run_monitor)
+echo "$OUT" | grep -q "HANDOFF REQUESTED" \
+  && pass "sin .tok, el corte por porcentaje sigue vivo" || fail "sin .tok el monitor enmudeció: $OUT"
+
 # .compact ausente (statusline no instalada) → 83, el valor medido en 200k
 SID5="handofftest5$$"
 INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID5" "$PWD")
@@ -531,6 +563,52 @@ echo "$INST_OUT" | grep -q "thresholds: ${INST_THRESHOLDS}" \
   && pass "la confirmación de instalación cita los mismos umbrales" \
   || fail "el resumen de instalación cita otros umbrales"
 rm -rf "$INST_HOME"
+
+# ── Cortes anclados en tokens ────────────────────────────────────────────────
+# El bug: la evidencia que justifica los cortes está medida en TOKENS (NoLiMa
+# dice 32k), pero se implementaron como PORCENTAJES. En 200k coincide de
+# casualidad; en 1M el 20% son 200,000 tokens, seis veces pasado el punto donde
+# la calidad ya cayó — y la barra decía "tranqui".
+TOK_HOME=$(mktemp -d); mkdir -p "$TOK_HOME/.claude"
+tok_run() {  # $1=pct  $2=window  $3=tokens
+  printf '{"model":{"id":"o"},"workspace":{"current_dir":"/nonexistent-tok"},"cost":{"total_cost_usd":1},"context_window":{"used_percentage":%s,"context_window_size":%s,"total_input_tokens":%s,"total_output_tokens":0},"session_id":"tok"}' "$1" "$2" "$3" \
+    | HOME="$TOK_HOME" COLUMNS=80 bash "$SL" 2>/dev/null | sed -n 2p
+}
+
+# El caso exacto que motivó el arreglo: 200k tokens en ventana de 1M.
+tok_run 20 1000000 200000 | grep -q "qué hacíamos" \
+  && pass "1M: 200k tokens marca degradación, no 'tranqui'" \
+  || fail "1M: 200k tokens no disparó el tramo por tokens: $(tok_run 20 1000000 200000)"
+
+# El umbral con cita dura: NoLiMa, 32k. En 1M eso es 3.2% de la barra.
+tok_run 3 1000000 32000 | grep -q "tranqui" \
+  && pass "1M: el corte de NoLiMa (32k) dispara al 3% de la barra" \
+  || fail "32k no cruzó el primer tramo en 1M: $(tok_run 3 1000000 32000)"
+tok_run 2 1000000 20000 | grep -q "entero activa" \
+  && pass "1M: bajo 32k sigue limpio" || fail "disparó antes de los 32k"
+
+# En 200k el comportamiento aprobado NO debe moverse: ahí los porcentajes y los
+# tokens están calibrados sobre la misma escala.
+tok_run 40 200000 80000  | grep -q "se calienta"   && pass "200k: 40% sigue siendo 🔥"  || fail "200k: cambió el tramo de 40%"
+tok_run 75 200000 150000 | grep -q "qué hacíamos"  && pass "200k: 75% sigue siendo 💀"  || fail "200k: cambió el tramo de 75%"
+tok_run 10 200000 20000  | grep -q "entero activa" && pass "200k: 10% sigue limpio"     || fail "200k: cambió el tramo bajo"
+
+# El crítico es cercanía al compact, NO degradación: se queda proporcional. Con
+# 940k tokens en 1M debe ser 🆘 aunque los cortes por token saturaron hace rato.
+tok_run 94 1000000 940000 | grep -q "handoff altiro" \
+  && pass "el crítico sigue siendo proporcional a la ventana" || fail "el crítico se rompió"
+
+# Sin los campos de tokens (payload viejo) se deriva del porcentaje: la barra
+# no puede quedarse muda ni apagar los cortes por token en silencio.
+printf '{"model":{"id":"o"},"workspace":{"current_dir":"/nonexistent-tok"},"cost":{"total_cost_usd":1},"context_window":{"used_percentage":20,"context_window_size":1000000},"session_id":"tok"}' \
+  | HOME="$TOK_HOME" COLUMNS=80 bash "$SL" 2>/dev/null | sed -n 2p | grep -q "qué hacíamos" \
+  && pass "sin campos de token, se derivan del porcentaje" || fail "payload sin tokens apagó los cortes"
+
+# El monitor tiene que seguir a la barra: si el statusline dice que degradaste,
+# el handoff no puede esperar al 60% de una ventana de 1M (= 600k tokens).
+[ -f "$TOK_HOME/.claude/ctx/tok.tok" ] \
+  && pass "el statusline publica los tokens para el monitor" || fail ".tok no se escribió"
+rm -rf "$TOK_HOME"
 
 rm -rf "$SL_HOME"
 

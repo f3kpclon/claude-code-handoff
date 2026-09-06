@@ -5,6 +5,11 @@
 # en 200k porque el auto-compact dispara antes (~83%) — nunca disparó.
 # El último corte se recalcula solo contra el compact real: ver CRIT abajo.
 THRESHOLDS=(60 75)
+# Los mismos cortes, en tokens absolutos. La degradación del razonamiento no
+# escala con el tamaño de ventana: en 1M el 60% son 600,000 tokens, cuatro veces
+# pasado el punto donde ya conviene cortar. Calibrados sobre 200k (60%=120k,
+# 75%=150k), así que ahí no cambia nada y en 1M mandan estos.
+TOKEN_THRESHOLDS=(120000 150000)
 DIALOG_TITLE="Claude Code — Handoff"
 # shellcheck disable=SC2016  # ${PCT_INT} is a template token, substituted below
 DIALOG_MSG='Context at ${PCT_INT}% — generate handoff snapshot to continue in a new session?'
@@ -47,9 +52,23 @@ for LEVEL in "${THRESHOLDS[@]}"; do
 done
 USABLE+=("$CRIT")
 
+# Tokens en contexto, que la statusline deja en <sid>.tok. Sin el archivo se
+# queda en 0 y los cortes por token simplemente no participan: en 200k el
+# resultado es el mismo, y es mejor que inventar un conteo.
+TOK=$(cat "$SENTINEL_DIR/${SESSION}.tok" 2>/dev/null)
+case "$TOK" in ''|*[!0-9]*) TOK=0 ;; esac
+
+# Cada nivel dispara por porcentaje O por tokens, lo que ocurra primero. El
+# sentinel se nombra por el nivel de porcentaje en ambos casos, así que un
+# mismo tramo no puede avisar dos veces por dos vías distintas.
 THRESHOLD=0
+IDX=0
 for LEVEL in "${USABLE[@]}"; do
-  if [ "$PCT_INT" -ge "$LEVEL" ] && [ ! -f "$SENTINEL_DIR/handoff_w${LEVEL}_${SESSION}" ]; then
+  TOK_LEVEL=0
+  [ "$IDX" -lt "${#TOKEN_THRESHOLDS[@]}" ] && TOK_LEVEL="${TOKEN_THRESHOLDS[$IDX]}"
+  IDX=$(( IDX + 1 ))
+  [ -f "$SENTINEL_DIR/handoff_w${LEVEL}_${SESSION}" ] && continue
+  if [ "$PCT_INT" -ge "$LEVEL" ] || { [ "$TOK_LEVEL" -gt 0 ] && [ "$TOK" -ge "$TOK_LEVEL" ]; }; then
     THRESHOLD=$LEVEL
     break
   fi
