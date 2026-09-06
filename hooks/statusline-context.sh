@@ -15,12 +15,32 @@
 #   · Agentes long-horizon: pérdida del objetivo original desde los ~10-15
 #     pasos. Una sesión de Claude Code pasa eso sin llegar al 40%.
 # Por eso el 🔥 arranca en 40 y no en 50, y el 💀 en 75 y no en 80.
+#
+# ── Dos físicas distintas, y por eso dos umbrales por tramo ──────────────────
+# La evidencia de arriba está medida en TOKENS ABSOLUTOS: NoLiMa dice 32k, no
+# "16% de la ventana". Pintar eso como porcentaje funciona por casualidad en
+# 200k y se rompe en 1M, donde el 20% son 200,000 tokens — seis veces pasado el
+# punto donde la calidad ya cayó, con la barra diciendo "tranqui".
+#
+# Lo que sí es proporcional a la ventana es la cercanía al auto-compact: si la
+# ventana es más grande, el compact llega más tarde, en tokens y en porcentaje.
+#
+# Entonces:
+#   · el tramo crítico (🆘 "el compact viene") se queda en PORCENTAJE
+#   · los demás (degradación del razonamiento) disparan por lo que ocurra
+#     primero, porcentaje O tokens
+#
+# Los anclajes en tokens están calibrados sobre una ventana de 200k, que es
+# donde se mapeó la evidencia: ahí se comportan casi igual que los porcentajes.
+# En 1M mandan ellos, que es todo el punto.
 CTX_CRIT_DOT="🆘";  CTX_CRIT_MSG="handoff altiro weón"
-CTX_LOST_DOT="💀";  CTX_LOST_AT=75; CTX_LOST_MSG="¿qué hacíamos?"
-CTX_FADE_DOT="🔪";  CTX_FADE_AT=65; CTX_FADE_MSG="me pase po"
-CTX_DRIFT_DOT="👻"; CTX_DRIFT_AT=55; CTX_DRIFT_MSG="en cualquier momento me voy en la vola'"
-CTX_WARM_DOT="🔥";  CTX_WARM_AT=40; CTX_WARM_MSG="se calienta la cosa"
-CTX_OK_DOT="😎";    CTX_OK_AT=20;   CTX_OK_MSG="tranqui"
+CTX_LOST_DOT="💀";  CTX_LOST_AT=75; CTX_LOST_TOK=150000; CTX_LOST_MSG="¿qué hacíamos?"
+CTX_FADE_DOT="🔪";  CTX_FADE_AT=65; CTX_FADE_TOK=130000; CTX_FADE_MSG="me pase po"
+CTX_DRIFT_DOT="👻"; CTX_DRIFT_AT=55; CTX_DRIFT_TOK=110000; CTX_DRIFT_MSG="en cualquier momento me voy en la vola'"
+CTX_WARM_DOT="🔥";  CTX_WARM_AT=40; CTX_WARM_TOK=80000;  CTX_WARM_MSG="se calienta la cosa"
+# 32k es el único de estos con cita dura: es el punto de NoLiMa. Los de arriba
+# son la misma escala del 200k, que no tiene fuente propia — es una rampa.
+CTX_OK_DOT="😎";    CTX_OK_AT=20;   CTX_OK_TOK=32000;   CTX_OK_MSG="tranqui"
 CTX_FRESH_DOT="😈"; CTX_FRESH_MSG="listo mi guasho! estamo' entero activa'os"
 
 # Tokens que Claude Code reserva y NUNCA te deja usar: el auto-compact dispara
@@ -90,6 +110,7 @@ JQ_OUT=$(echo "$input" | jq -r '
   (.cost.total_cost_usd // 0),
   (.context_window.used_percentage // ""),
   (.context_window.context_window_size // 0),
+  (((.context_window.total_input_tokens // 0) + (.context_window.total_output_tokens // 0)) // 0),
   (.session_id // ""),
   (.rate_limits.five_hour.used_percentage  // ""),
   (.rate_limits.five_hour.resets_at        // ""),
@@ -106,6 +127,7 @@ JQ_OUT=$(echo "$input" | jq -r '
     IFS= read -r COST
     IFS= read -r used
     IFS= read -r CTX_SIZE
+    IFS= read -r CTX_TOK
     IFS= read -r SID
     IFS= read -r FIVE_H
     IFS= read -r FIVE_H_RESET
@@ -122,6 +144,16 @@ JQ_OUT=$(echo "$input" | jq -r '
 # Sin context_window_size (payload viejo) se cae al 83, que es el valor medido
 # en 200k — la ventana por defecto y el caso de lejos más común.
 case "$CTX_SIZE" in ''|*[!0-9]*) CTX_SIZE=0 ;; esac
+
+# ── Tokens en contexto ───────────────────────────────────────────────────────
+# Se prefiere el conteo real del payload (input incluye lecturas y escrituras
+# de caché, o sea el contexto que el modelo está atendiendo de verdad). Si no
+# viene, se deriva del porcentaje: peor, pero es un proxy consistente con la
+# barra en vez de un cero que apagaría los cortes por tokens sin avisar.
+case "$CTX_TOK" in ''|*[!0-9]*) CTX_TOK=0 ;; esac
+if [ "$CTX_TOK" -eq 0 ] && [ "$CTX_SIZE" -gt 0 ]; then
+    CTX_TOK=$(( CTX_SIZE * ${used%.*} / 100 ))
+fi
 if [ "$CTX_SIZE" -gt "$CTX_RESERVE" ]; then
     COMPACT_PCT=$(( (CTX_SIZE - CTX_RESERVE) * 100 / CTX_SIZE ))
 else
@@ -146,6 +178,10 @@ if [ -n "$SID" ]; then
     # tiene cómo saber si la ventana es de 200k o de 1M, y sus umbrales fijos
     # quedan o muy tarde (nunca disparan) o absurdamente temprano.
     echo "$COMPACT_PCT" > "$CTX_DIR/$SID.compact"
+    # Los tokens en contexto, por el mismo motivo que el .compact: el monitor
+    # sólo ve archivos, y sin esto sus umbrales quedan en porcentaje puro —
+    # el mismo error que la barra acaba de dejar de cometer.
+    echo "$CTX_TOK" > "$CTX_DIR/$SID.tok"
     # Reap stale per-session state: pct files, handoff threshold sentinels and
     # abandoned git caches older than a day — sessions long gone.
     #
@@ -161,7 +197,7 @@ if [ -n "$SID" ]; then
         # Stamped BEFORE the sweep: if the find dies, the next run waits an hour
         # instead of retrying the expensive scan every single second.
         printf '%s' "$NOW" > "$HK"
-        find "$CTX_DIR" \( -name '*.pct' -o -name '*.compact' -o -name 'handoff_w*' -o -name 'effort_w*' -o -name 'gitpart_*' \) -mmin +1440 -delete 2>/dev/null
+        find "$CTX_DIR" \( -name '*.pct' -o -name '*.compact' -o -name '*.tok' -o -name 'handoff_w*' -o -name 'effort_w*' -o -name 'gitpart_*' \) -mmin +1440 -delete 2>/dev/null
     fi
 fi
 pct_int=$(( ${used%.*} ))
@@ -297,12 +333,16 @@ printf "[%s]%s | 💰 %s\n" "$MODEL" "$GIT_PART" "$COST_FMT"
 # ── Line 2: Contexto de sesión ────────────────────────────────────────────────
 # El corte crítico es dinámico (ver CTX_CRIT_AT arriba); el resto son fijos y
 # están donde la evidencia dice, no repartidos de 10 en 10.
+# El crítico sólo por porcentaje: mide cercanía al compact, que SÍ escala con
+# la ventana. Los demás miden degradación, que es absoluta en tokens — disparan
+# por lo que ocurra primero. En 200k mandan casi siempre los porcentajes; en 1M,
+# los tokens, que es exactamente la corrección.
 if   [ "$pct_int" -ge "$CTX_CRIT_AT" ];  then color="$RED";    dot="$CTX_CRIT_DOT";  msg="$CTX_CRIT_MSG"
-elif [ "$pct_int" -ge "$CTX_LOST_AT" ];  then color="$RED";    dot="$CTX_LOST_DOT";  msg="$CTX_LOST_MSG"
-elif [ "$pct_int" -ge "$CTX_FADE_AT" ];  then color="$RED";    dot="$CTX_FADE_DOT";  msg="$CTX_FADE_MSG"
-elif [ "$pct_int" -ge "$CTX_DRIFT_AT" ]; then color="$YELLOW"; dot="$CTX_DRIFT_DOT"; msg="$CTX_DRIFT_MSG"
-elif [ "$pct_int" -ge "$CTX_WARM_AT" ];  then color="$YELLOW"; dot="$CTX_WARM_DOT";  msg="$CTX_WARM_MSG"
-elif [ "$pct_int" -ge "$CTX_OK_AT" ];    then color="$GREEN";  dot="$CTX_OK_DOT";    msg="$CTX_OK_MSG"
+elif [ "$pct_int" -ge "$CTX_LOST_AT" ]  || [ "$CTX_TOK" -ge "$CTX_LOST_TOK" ];  then color="$RED";    dot="$CTX_LOST_DOT";  msg="$CTX_LOST_MSG"
+elif [ "$pct_int" -ge "$CTX_FADE_AT" ]  || [ "$CTX_TOK" -ge "$CTX_FADE_TOK" ];  then color="$RED";    dot="$CTX_FADE_DOT";  msg="$CTX_FADE_MSG"
+elif [ "$pct_int" -ge "$CTX_DRIFT_AT" ] || [ "$CTX_TOK" -ge "$CTX_DRIFT_TOK" ]; then color="$YELLOW"; dot="$CTX_DRIFT_DOT"; msg="$CTX_DRIFT_MSG"
+elif [ "$pct_int" -ge "$CTX_WARM_AT" ]  || [ "$CTX_TOK" -ge "$CTX_WARM_TOK" ];  then color="$YELLOW"; dot="$CTX_WARM_DOT";  msg="$CTX_WARM_MSG"
+elif [ "$pct_int" -ge "$CTX_OK_AT" ]    || [ "$CTX_TOK" -ge "$CTX_OK_TOK" ];    then color="$GREEN";  dot="$CTX_OK_DOT";    msg="$CTX_OK_MSG"
 else                                          color="$GREEN";  dot="$CTX_FRESH_DOT"; msg="$CTX_FRESH_MSG"
 fi
 echo "🧠 Contexto       ${dot} ${color}[$(make_bar "$pct_int")] ${pct_int}% — ${msg}${RESET}"

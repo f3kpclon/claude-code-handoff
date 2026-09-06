@@ -254,6 +254,26 @@ quality has already dropped, which is well before the window fills up.
 | Long-horizon agents lose the original goal from ~10-15 steps | [arXiv 2606.29718](https://arxiv.org/pdf/2606.29718) | plausible — preprint |
 | Auto-compaction fires around 83.5% on a 200k window (`effectiveWindow − 13000`) | deobfuscated code in [issue #31806](https://github.com/anthropics/claude-code/issues/31806) | **plausible — not first-party** |
 
+**Two different physics, so two thresholds per band.** The evidence above is
+measured in **absolute tokens** — NoLiMa says 32k, not "16% of the window".
+Painting that as a percentage happens to work on a 200k window and breaks on
+1M, where 20% is 200,000 tokens: six times past the point where quality already
+dropped, with the bar still reading "tranqui".
+
+What *is* proportional to the window is proximity to auto-compaction — a bigger
+window means compaction arrives later, in tokens and in percent alike. So:
+
+| Band | Fires on | Why |
+|---|---|---|
+| 🆘 critical | percentage only | measures compaction proximity, which scales with the window |
+| everything below | percentage **or** tokens, whichever comes first | measures reasoning degradation, which is absolute |
+
+The token anchors are calibrated on a 200k window, where the evidence was
+mapped — there they behave almost exactly like the percentages, so a 200k
+session sees no change. On 1M the token anchors take over, which is the point.
+Only `CTX_OK_TOK=32000` has a hard citation (NoLiMa); the ones above it are the
+same 200k scale, i.e. a ramp, not a measurement.
+
 That last row is the weak one, and it carries `CTX_RESERVE`. Anthropic documents
 no compaction threshold anywhere, and the community reports disagree: [issue
 #15719](https://github.com/anthropics/claude-code/issues/15719) (Dec 2025) claims a
@@ -286,7 +306,7 @@ Note: `THRESHOLDS` controls when the **dialog** fires; the statusline emoji band
 bash test.sh
 ```
 
-Verifies snapshot save logic, install idempotency, PreCompact behavior, statusline safety, monitor threshold/sentinel logic (with mocked dialogs), the dynamic compaction ceiling, spend-budget rendering, and CUSTOMIZE injection robustness. 90 assertions.
+Verifies snapshot save logic, install idempotency, PreCompact behavior, statusline safety, monitor threshold/sentinel logic (with mocked dialogs), the dynamic compaction ceiling, spend-budget rendering, and CUSTOMIZE injection robustness. 102 assertions.
 
 ## Security
 
