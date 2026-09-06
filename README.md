@@ -254,6 +254,34 @@ quality has already dropped, which is well before the window fills up.
 | Long-horizon agents lose the original goal from ~10-15 steps | [arXiv 2606.29718](https://arxiv.org/pdf/2606.29718) | plausible — preprint |
 | Auto-compaction fires around 83.5% on a 200k window (`effectiveWindow − 13000`) | deobfuscated code in [issue #31806](https://github.com/anthropics/claude-code/issues/31806) | **plausible — not first-party** |
 
+**The model matters more than the window.** On Anthropic's own MRCR v2 8-needle
+benchmark, with the *same* 1M window, Opus 4.6 scores 76% and Sonnet 4.5 scores
+18.5% — a 4x gap. Opus holds 93% at 256K. That is the largest single effect in
+any of the evidence gathered here, larger than window size or band placement, so
+the token anchors are split by model family (`*opus*` vs everything else) using
+`model.id`. An unrecognized model gets the conservative scale: over-warning beats
+a new model id silently switching the warnings off.
+
+| Anchor | Opus | Others | Basis |
+|---|---|---|---|
+| 😎 | 64k | 32k | others: NoLiMa's 50%-of-baseline point (hard citation) |
+| 🔥 | 128k | 80k | ramp |
+| 👻 | 192k | 110k | ramp |
+| 🔪 | **256k** | 130k | **Opus: Anthropic's measured 93% point** |
+| 💀 | 384k | 150k | ramp |
+
+Only two cells there are measurements — Opus 256k and others 32k. The rest is a
+ramp between them, and is labelled as such in the source rather than dressed up
+as a finding. **Known gap:** there is no public Sonnet number at 256K, only at
+1M, so the "others" column above 32k is the weakest part of this table.
+
+**What is deliberately *not* built:** a bar normalised against a degradation
+saturation point. That design needs a 100% anchor, and no published evidence
+establishes one — MRCR is a retrieval benchmark and NoLiMa showed retrieval
+benchmarks overstate, so the honest range is too wide to draw. Instead
+`pre-compact.sh` logs `tokens`, `tier` and `model` at every compaction, so the
+curve can be measured locally and the anchors tuned from real sessions.
+
 **Two different physics, so two thresholds per band.** The evidence above is
 measured in **absolute tokens** — NoLiMa says 32k, not "16% of the window".
 Painting that as a percentage happens to work on a 200k window and breaks on
@@ -306,7 +334,7 @@ Note: `THRESHOLDS` controls when the **dialog** fires; the statusline emoji band
 bash test.sh
 ```
 
-Verifies snapshot save logic, install idempotency, PreCompact behavior, statusline safety, monitor threshold/sentinel logic (with mocked dialogs), the dynamic compaction ceiling, spend-budget rendering, and CUSTOMIZE injection robustness. 102 assertions.
+Verifies snapshot save logic, install idempotency, PreCompact behavior, statusline safety, monitor threshold/sentinel logic (with mocked dialogs), the dynamic compaction ceiling, spend-budget rendering, and CUSTOMIZE injection robustness. 120 assertions.
 
 ## Security
 

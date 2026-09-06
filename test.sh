@@ -135,7 +135,9 @@ REPO_NAME=$(basename "$FAKE_REPO")
 mkdir -p "$FAKE_HOME/.claude/ctx"
 echo "84.2" > "$FAKE_HOME/.claude/ctx/probe.pct"
 echo "83"   > "$FAKE_HOME/.claude/ctx/probe.compact"
-PROBE_IN=$(python3 -c "import json; print(json.dumps({'cwd': '$FAKE_REPO', 'session_id': 'probe'}))")
+echo "190000" > "$FAKE_HOME/.claude/ctx/probe.tok"
+echo "opus"   > "$FAKE_HOME/.claude/ctx/probe.tier"
+PROBE_IN=$(python3 -c "import json; print(json.dumps({'cwd': '$FAKE_REPO', 'session_id': 'probe', 'model': {'id': 'claude-opus-5'}}))")
 echo "$PROBE_IN" | HOME="$FAKE_HOME" bash "$SCRIPT_DIR/hooks/pre-compact.sh" > /dev/null 2>&1
 OBSERVED="$FAKE_HOME/.claude/ctx/compact-observed.tsv"
 [ -f "$OBSERVED" ] \
@@ -144,6 +146,14 @@ grep -q "observed=84.2" "$OBSERVED" 2>/dev/null \
   && pass "guarda el % observado (juez real)"             || fail "% observado ausente: $(cat "$OBSERVED" 2>/dev/null)"
 grep -q "predicted=83" "$OBSERVED" 2>/dev/null \
   && pass "guarda el % predicho, para contrastar"         || fail "% predicho ausente"
+# El modelo y los tokens: la evidencia dice que la familia manda, así que una
+# curva propia sin esa columna no sirve para recalibrar nada.
+grep -q "model=claude-opus-5" "$OBSERVED" 2>/dev/null \
+  && pass "la sonda registra el modelo"                   || fail "modelo ausente: $(cat "$OBSERVED")"
+grep -q "tokens=190000" "$OBSERVED" 2>/dev/null \
+  && pass "la sonda registra los tokens"                  || fail "tokens ausentes"
+grep -q "tier=opus" "$OBSERVED" 2>/dev/null \
+  && pass "la sonda registra la familia"                  || fail "tier ausente"
 
 # Sin session_id la sonda se calla, pero el snapshot debe salir igual: medir
 # nunca puede costar una compactación.
@@ -346,6 +356,49 @@ echo "62" > "$FAKE_HOME/.claude/ctx/$SID9.pct"
 OUT=$(run_monitor)
 echo "$OUT" | grep -q "HANDOFF REQUESTED" \
   && pass "sin .tok, el corte por porcentaje sigue vivo" || fail "sin .tok el monitor enmudeció: $OUT"
+
+# ── El monitor usa la misma escala que la barra ─────────────────────────────
+# Si la barra dice que Opus está sano a los 200k, el monitor no puede estar
+# ofreciendo handoff ahí — y viceversa para Sonnet.
+SID10="handofftest10$$"
+INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID10" "$PWD")
+echo "20" > "$FAKE_HOME/.claude/ctx/$SID10.pct"
+echo "96" > "$FAKE_HOME/.claude/ctx/$SID10.compact"
+echo "200000" > "$FAKE_HOME/.claude/ctx/$SID10.tok"
+echo "opus" > "$FAKE_HOME/.claude/ctx/$SID10.tier"
+OUT=$(run_monitor)
+echo "$OUT" | grep -q "HANDOFF REQUESTED" \
+  && pass "Opus: 200k cruza el primer corte (192k)" || fail "opus no disparó a 200k: $OUT"
+
+# Los mismos 150k: para Sonnet ya es hora, para Opus todavía no.
+SID11="handofftest11$$"
+INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID11" "$PWD")
+echo "15" > "$FAKE_HOME/.claude/ctx/$SID11.pct"
+echo "96" > "$FAKE_HOME/.claude/ctx/$SID11.compact"
+echo "150000" > "$FAKE_HOME/.claude/ctx/$SID11.tok"
+echo "opus" > "$FAKE_HOME/.claude/ctx/$SID11.tier"
+OUT=$(run_monitor)
+[ -z "$OUT" ] && pass "Opus: 150k todavía no molesta" || fail "opus cortó demasiado pronto: $OUT"
+
+SID12="handofftest12$$"
+INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID12" "$PWD")
+echo "15" > "$FAKE_HOME/.claude/ctx/$SID12.pct"
+echo "96" > "$FAKE_HOME/.claude/ctx/$SID12.compact"
+echo "150000" > "$FAKE_HOME/.claude/ctx/$SID12.tok"
+echo "std" > "$FAKE_HOME/.claude/ctx/$SID12.tier"
+OUT=$(run_monitor)
+echo "$OUT" | grep -q "HANDOFF REQUESTED" \
+  && pass "Sonnet: los mismos 150k sí ofrecen handoff" || fail "std no disparó a 150k: $OUT"
+
+# Sin .tier → escala conservadora, no la de Opus.
+SID13="handofftest13$$"
+INPUT=$(printf '{"session_id": "%s", "cwd": "%s"}' "$SID13" "$PWD")
+echo "15" > "$FAKE_HOME/.claude/ctx/$SID13.pct"
+echo "96" > "$FAKE_HOME/.claude/ctx/$SID13.compact"
+echo "150000" > "$FAKE_HOME/.claude/ctx/$SID13.tok"
+OUT=$(run_monitor)
+echo "$OUT" | grep -q "HANDOFF REQUESTED" \
+  && pass "sin .tier cae a la escala conservadora" || fail "sin .tier se relajaron los umbrales: $OUT"
 
 # .compact ausente (statusline no instalada) → 83, el valor medido en 200k
 SID5="handofftest5$$"
@@ -608,6 +661,50 @@ printf '{"model":{"id":"o"},"workspace":{"current_dir":"/nonexistent-tok"},"cost
 # el handoff no puede esperar al 60% de una ventana de 1M (= 600k tokens).
 [ -f "$TOK_HOME/.claude/ctx/tok.tok" ] \
   && pass "el statusline publica los tokens para el monitor" || fail ".tok no se escribió"
+# ── Anclajes por familia de modelo ──────────────────────────────────────────
+# El efecto más grande de la evidencia recogida: con la MISMA ventana de 1M,
+# Anthropic mide Opus 4.6 en 76% y Sonnet 4.5 en 18,5%. Un solo juego de
+# umbrales está garantizado a estar mal para uno de los dos.
+tier_run() {  # $1=model  $2=pct  $3=tokens
+  printf '{"model":{"id":"%s"},"workspace":{"current_dir":"/nonexistent-tok"},"cost":{"total_cost_usd":1},"context_window":{"used_percentage":%s,"context_window_size":1000000,"total_input_tokens":%s,"total_output_tokens":0},"session_id":"tier"}' "$1" "$2" "$3" \
+    | HOME="$TOK_HOME" COLUMNS=80 bash "$SL" 2>/dev/null | sed -n 2p
+}
+tier_run claude-sonnet-5 25 252000 | grep -q "qué hacíamos" \
+  && pass "252k en Sonnet marca degradación fuerte" || fail "sonnet: $(tier_run claude-sonnet-5 25 252000)"
+tier_run claude-opus-5 25 252000 | grep -q "qué hacíamos" \
+  && fail "opus tratado con la escala conservadora a 252k" \
+  || pass "252k en Opus NO marca lo mismo que en Sonnet"
+tier_run claude-opus-5 26 260000 | grep -q "me pase po" \
+  && pass "Opus: el 🔪 cae en el 256k medido por Anthropic" || fail "opus 260k: $(tier_run claude-opus-5 26 260000)"
+tier_run claude-opus-5 40 400000 | grep -q "qué hacíamos" \
+  && pass "Opus: 400k sí llega al 💀" || fail "opus 400k no escaló"
+
+# Modelo desconocido → escala conservadora. Avisar de más es preferible a que
+# un id nuevo apague los avisos sin que nadie se entere.
+tier_run modelo-que-no-existe 25 252000 | grep -q "qué hacíamos" \
+  && pass "modelo desconocido usa la escala conservadora" || fail "un id desconocido relajó los umbrales"
+tier_run "Opus 4.6" 25 252000 | grep -q "qué hacíamos" \
+  && fail "display_name 'Opus 4.6' no fue reconocido como opus" \
+  || pass "reconoce la familia también por display_name"
+
+# El conteo de tokens en la línea (opción 1): sin él, "25% — ¿qué hacíamos?"
+# se lee como contradicción en vez de como dos hechos distintos.
+tier_run claude-sonnet-5 25 252000 | grep -q "252k tok" \
+  && pass "la línea muestra el conteo de tokens" || fail "falta el conteo en la línea"
+tier_run claude-sonnet-5 1 500 | grep -q "· 500 tok" \
+  && pass "bajo 1000 se muestra crudo, no '0k'" || fail "formateo de tokens chicos roto"
+
+[ -f "$TOK_HOME/.claude/ctx/tier.tier" ] \
+  && pass "la familia se publica para el monitor" || fail ".tier no se escribió"
+# Explícito y en este orden: el archivo refleja la ÚLTIMA corrida, así que la
+# aserción tiene que fijar cuál fue en vez de asumirla.
+tier_run claude-opus-5 25 252000 > /dev/null
+[ "$(cat "$TOK_HOME/.claude/ctx/tier.tier")" = "opus" ] \
+  && pass ".tier dice opus tras una corrida de Opus" || fail ".tier no siguió al modelo"
+tier_run claude-sonnet-5 25 252000 > /dev/null
+[ "$(cat "$TOK_HOME/.claude/ctx/tier.tier")" = "std" ] \
+  && pass ".tier vuelve a std tras una corrida de Sonnet" || fail ".tier se quedó pegado en opus"
+
 rm -rf "$TOK_HOME"
 
 rm -rf "$SL_HOME"

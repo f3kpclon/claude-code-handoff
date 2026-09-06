@@ -13,6 +13,8 @@ VERSION=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')
 THRESHOLDS="60 75"
 # Los mismos cortes en tokens absolutos — degradación no escala con la ventana.
 TOKEN_THRESHOLDS="120000 150000"
+# Opus aguanta más (Anthropic: 93% a 256K vs 18,5% de Sonnet 4.5 a 1M).
+TOKEN_THRESHOLDS_OPUS="192000 256000"
 DIALOG_TITLE="Claude Code — Handoff"
 # shellcheck disable=SC2016
 DIALOG_MSG='Context at ${PCT_INT}% — generate handoff snapshot to continue in a new session?'
@@ -71,6 +73,7 @@ rm -f "$HOOKS_DIR/handoff-inject.sh"  # removed in v0.3 — dead code from old a
 # (embedded quotes, $, spaces), while preserving the literal ${PCT_INT} token.
 HANDOFF_THRESHOLDS="$THRESHOLDS" \
 HANDOFF_TOKEN_THRESHOLDS="$TOKEN_THRESHOLDS" \
+HANDOFF_TOKEN_THRESHOLDS_OPUS="$TOKEN_THRESHOLDS_OPUS" \
 HANDOFF_DIALOG_TITLE="$DIALOG_TITLE" \
 HANDOFF_DIALOG_MSG="$DIALOG_MSG" \
 HANDOFF_CONFIRM_MSG="$CONFIRM_MSG" \
@@ -96,12 +99,13 @@ replace_line(monitor, 'THRESHOLDS=',   f'THRESHOLDS=({thresholds})')
 # no es prefijo de 'TOKEN_THRESHOLDS=', así que el orden acá da igual — pero el
 # de arriba sí debe correr sobre la línea propia, no sobre la de tokens.
 replace_line(monitor, 'TOKEN_THRESHOLDS=', f'TOKEN_THRESHOLDS=({os.environ["HANDOFF_TOKEN_THRESHOLDS"]})')
+replace_line(monitor, 'TOKEN_THRESHOLDS_OPUS=', f'TOKEN_THRESHOLDS_OPUS=({os.environ["HANDOFF_TOKEN_THRESHOLDS_OPUS"]})')
 replace_line(monitor, 'DIALOG_TITLE=', f'DIALOG_TITLE={shlex.quote(os.environ["HANDOFF_DIALOG_TITLE"])}')
 replace_line(monitor, 'DIALOG_MSG=',   f'DIALOG_MSG={shlex.quote(os.environ["HANDOFF_DIALOG_MSG"])}')
 replace_line(skill,   '💾 ',           os.environ['HANDOFF_CONFIRM_MSG'])
 PYEOF
 chmod +x "$HOOKS_DIR/statusline-context.sh" "$HOOKS_DIR/handoff-monitor.sh" "$HOOKS_DIR/pre-compact.sh"
-echo "✓ hooks installed (thresholds: ${THRESHOLDS} · tokens: ${TOKEN_THRESHOLDS})"
+echo "✓ hooks installed (thresholds: ${THRESHOLDS} · tokens: ${TOKEN_THRESHOLDS} · opus: ${TOKEN_THRESHOLDS_OPUS})"
 
 # ── CLAUDE.md — append or upgrade protocol ───────────────────────────────────
 OLD_TRIGGER="Si el mensaje o contexto adicional contiene \`handoff\`"
