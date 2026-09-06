@@ -34,14 +34,40 @@
 # donde se mapeó la evidencia: ahí se comportan casi igual que los porcentajes.
 # En 1M mandan ellos, que es todo el punto.
 CTX_CRIT_DOT="🆘";  CTX_CRIT_MSG="handoff altiro weón"
-CTX_LOST_DOT="💀";  CTX_LOST_AT=75; CTX_LOST_TOK=150000; CTX_LOST_MSG="¿qué hacíamos?"
-CTX_FADE_DOT="🔪";  CTX_FADE_AT=65; CTX_FADE_TOK=130000; CTX_FADE_MSG="me pase po"
-CTX_DRIFT_DOT="👻"; CTX_DRIFT_AT=55; CTX_DRIFT_TOK=110000; CTX_DRIFT_MSG="en cualquier momento me voy en la vola'"
-CTX_WARM_DOT="🔥";  CTX_WARM_AT=40; CTX_WARM_TOK=80000;  CTX_WARM_MSG="se calienta la cosa"
-# 32k es el único de estos con cita dura: es el punto de NoLiMa. Los de arriba
-# son la misma escala del 200k, que no tiene fuente propia — es una rampa.
-CTX_OK_DOT="😎";    CTX_OK_AT=20;   CTX_OK_TOK=32000;   CTX_OK_MSG="tranqui"
+CTX_LOST_DOT="💀";  CTX_LOST_AT=75; CTX_LOST_MSG="¿qué hacíamos?"
+CTX_FADE_DOT="🔪";  CTX_FADE_AT=65; CTX_FADE_MSG="me pase po"
+CTX_DRIFT_DOT="👻"; CTX_DRIFT_AT=55; CTX_DRIFT_MSG="en cualquier momento me voy en la vola'"
+CTX_WARM_DOT="🔥";  CTX_WARM_AT=40; CTX_WARM_MSG="se calienta la cosa"
+CTX_OK_DOT="😎";    CTX_OK_AT=20;   CTX_OK_MSG="tranqui"
 CTX_FRESH_DOT="😈"; CTX_FRESH_MSG="listo mi guasho! estamo' entero activa'os"
+
+# ── Anclajes en tokens, por FAMILIA DE MODELO ────────────────────────────────
+# El efecto más grande de toda la evidencia recogida no es el tamaño de ventana:
+# es el modelo. En el benchmark propio de Anthropic (MRCR v2, 8 agujas), con la
+# MISMA ventana de 1M, Opus 4.6 saca 76% y Sonnet 4.5 saca 18,5%. Cuatro veces.
+# Un solo juego de umbrales está garantizado a estar mal para uno de los dos.
+#
+# Opus — anclado en dato de primera fuente: 93% a 256K, 76% a 1M. El 256000 es
+# el punto medido donde todavía está sano y a partir del cual declina; por eso
+# es el 🔪 y no algo más grave. Lo de abajo y el 💀 son rampa, sin fuente propia.
+CTX_OK_TOK_OPUS=64000
+CTX_WARM_TOK_OPUS=128000
+CTX_DRIFT_TOK_OPUS=192000
+CTX_FADE_TOK_OPUS=256000
+CTX_LOST_TOK_OPUS=384000
+#
+# Resto (Sonnet, Haiku, desconocido) — de NoLiMa y Chroma, que midieron modelos
+# de la generación anterior. El 32000 es el único con cita dura (NoLiMa: bajo el
+# 50% del baseline); los otros son la escala del 200k. Sonnet 4.5 a 1M da 18,5%,
+# así que ser conservador acá está justificado.
+#
+# HUECO CONOCIDO: no hay dato público de Sonnet a 256K, sólo a 1M. Si aparece,
+# estos cinco números son los que hay que revisar.
+CTX_OK_TOK_STD=32000
+CTX_WARM_TOK_STD=80000
+CTX_DRIFT_TOK_STD=110000
+CTX_FADE_TOK_STD=130000
+CTX_LOST_TOK_STD=150000
 
 # Tokens que Claude Code reserva y NUNCA te deja usar: el auto-compact dispara
 # cuando quedan ~13k libres de una ventana efectiva que ya viene recortada
@@ -154,6 +180,34 @@ case "$CTX_TOK" in ''|*[!0-9]*) CTX_TOK=0 ;; esac
 if [ "$CTX_TOK" -eq 0 ] && [ "$CTX_SIZE" -gt 0 ]; then
     CTX_TOK=$(( CTX_SIZE * ${used%.*} / 100 ))
 fi
+
+# ── Familia de modelo ────────────────────────────────────────────────────────
+# Se compara en minúsculas contra el id (claude-opus-5) y también sirve para el
+# display_name ("Opus 4.6"), porque MODEL cae a display_name cuando no hay id.
+# Cualquier cosa que no sea Opus usa la escala conservadora: si el modelo es
+# desconocido, avisar de más es mejor que avisar de menos.
+case "$(printf '%s' "$MODEL" | tr '[:upper:]' '[:lower:]')" in
+    *opus*)
+        CTX_TIER="opus"
+        CTX_OK_TOK=$CTX_OK_TOK_OPUS;       CTX_WARM_TOK=$CTX_WARM_TOK_OPUS
+        CTX_DRIFT_TOK=$CTX_DRIFT_TOK_OPUS; CTX_FADE_TOK=$CTX_FADE_TOK_OPUS
+        CTX_LOST_TOK=$CTX_LOST_TOK_OPUS
+        ;;
+    *)
+        CTX_TIER="std"
+        CTX_OK_TOK=$CTX_OK_TOK_STD;        CTX_WARM_TOK=$CTX_WARM_TOK_STD
+        CTX_DRIFT_TOK=$CTX_DRIFT_TOK_STD;  CTX_FADE_TOK=$CTX_FADE_TOK_STD
+        CTX_LOST_TOK=$CTX_LOST_TOK_STD
+        ;;
+esac
+
+# Tokens legibles: 252k en vez de 251647. Bajo 1000 se muestra crudo — a esa
+# altura el número exacto no le importa a nadie, pero un "0k" sí confundiría.
+if [ "$CTX_TOK" -ge 1000 ]; then
+    CTX_TOK_FMT="$(( CTX_TOK / 1000 ))k"
+else
+    CTX_TOK_FMT="$CTX_TOK"
+fi
 if [ "$CTX_SIZE" -gt "$CTX_RESERVE" ]; then
     COMPACT_PCT=$(( (CTX_SIZE - CTX_RESERVE) * 100 / CTX_SIZE ))
 else
@@ -182,6 +236,8 @@ if [ -n "$SID" ]; then
     # sólo ve archivos, y sin esto sus umbrales quedan en porcentaje puro —
     # el mismo error que la barra acaba de dejar de cometer.
     echo "$CTX_TOK" > "$CTX_DIR/$SID.tok"
+    # La familia, para que el monitor use la misma escala que la barra.
+    echo "$CTX_TIER" > "$CTX_DIR/$SID.tier"
     # Reap stale per-session state: pct files, handoff threshold sentinels and
     # abandoned git caches older than a day — sessions long gone.
     #
@@ -197,7 +253,7 @@ if [ -n "$SID" ]; then
         # Stamped BEFORE the sweep: if the find dies, the next run waits an hour
         # instead of retrying the expensive scan every single second.
         printf '%s' "$NOW" > "$HK"
-        find "$CTX_DIR" \( -name '*.pct' -o -name '*.compact' -o -name '*.tok' -o -name 'handoff_w*' -o -name 'effort_w*' -o -name 'gitpart_*' \) -mmin +1440 -delete 2>/dev/null
+        find "$CTX_DIR" \( -name '*.pct' -o -name '*.compact' -o -name '*.tok' -o -name '*.tier' -o -name 'handoff_w*' -o -name 'effort_w*' -o -name 'gitpart_*' \) -mmin +1440 -delete 2>/dev/null
     fi
 fi
 pct_int=$(( ${used%.*} ))
@@ -345,7 +401,11 @@ elif [ "$pct_int" -ge "$CTX_WARM_AT" ]  || [ "$CTX_TOK" -ge "$CTX_WARM_TOK" ];  
 elif [ "$pct_int" -ge "$CTX_OK_AT" ]    || [ "$CTX_TOK" -ge "$CTX_OK_TOK" ];    then color="$GREEN";  dot="$CTX_OK_DOT";    msg="$CTX_OK_MSG"
 else                                          color="$GREEN";  dot="$CTX_FRESH_DOT"; msg="$CTX_FRESH_MSG"
 fi
-echo "🧠 Contexto       ${dot} ${color}[$(make_bar "$pct_int")] ${pct_int}% — ${msg}${RESET}"
+# El conteo va en la línea porque la barra y el emoji miden cosas distintas: el
+# % es cercanía al compact, el emoji es degradación (absoluta, en tokens). Sin
+# el número, "25% — ¿qué hacíamos?" se lee como una contradicción en vez de como
+# dos hechos.
+echo "🧠 Contexto       ${dot} ${color}[$(make_bar "$pct_int")] ${pct_int}% · ${CTX_TOK_FMT} tok — ${msg}${RESET}"
 
 # ── Line 3: Cupo horario (5h) — solo Pro/Max ─────────────────────────────────
 if [ -n "$FIVE_H" ]; then

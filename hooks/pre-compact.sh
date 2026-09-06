@@ -32,8 +32,17 @@ mkdir -p "$HDIR"
     if [ -n "$SID" ] && [ -f "$HOME/.claude/ctx/$SID.pct" ]; then
         OBS_PCT=$(cat "$HOME/.claude/ctx/$SID.pct" 2>/dev/null)
         OBS_COMPACT=$(cat "$HOME/.claude/ctx/$SID.compact" 2>/dev/null)
-        printf '%s\tobserved=%s\tpredicted=%s\n' \
+        # El modelo y los tokens, no sólo el porcentaje: la evidencia publicada
+        # dice que la familia manda (Opus 76% vs Sonnet 18,5% a 1M) y nadie midió
+        # razonamiento de agente a N tokens. Con estas columnas, después de unas
+        # semanas hay una curva propia — de este modelo, este trabajo — en vez de
+        # calibrar contra benchmarks de retrieval que sobrestiman.
+        OBS_TOK=$(cat "$HOME/.claude/ctx/$SID.tok" 2>/dev/null)
+        OBS_TIER=$(cat "$HOME/.claude/ctx/$SID.tier" 2>/dev/null)
+        OBS_MODEL=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); m=d.get('model') or {}; print(m.get('id') or m.get('display_name') or '')" 2>/dev/null)
+        printf '%s\tobserved=%s\tpredicted=%s\ttokens=%s\ttier=%s\tmodel=%s\n' \
             "$(date '+%Y-%m-%d %H:%M')" "${OBS_PCT:-?}" "${OBS_COMPACT:-?}" \
+            "${OBS_TOK:-?}" "${OBS_TIER:-?}" "${OBS_MODEL:-?}" \
             >> "$HOME/.claude/ctx/compact-observed.tsv"
     fi
 } 2>/dev/null || true

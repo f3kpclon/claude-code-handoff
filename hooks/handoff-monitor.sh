@@ -10,6 +10,10 @@ THRESHOLDS=(60 75)
 # pasado el punto donde ya conviene cortar. Calibrados sobre 200k (60%=120k,
 # 75%=150k), así que ahí no cambia nada y en 1M mandan estos.
 TOKEN_THRESHOLDS=(120000 150000)
+# Opus aguanta bastante más: Anthropic mide 93% a 256K y 76% a 1M, contra 18,5%
+# de Sonnet 4.5 a 1M. Ofrecer handoff a los 120k en Opus sería cortar la sesión
+# donde el modelo todavía está sano. La familia la deja la statusline en .tier.
+TOKEN_THRESHOLDS_OPUS=(192000 256000)
 DIALOG_TITLE="Claude Code — Handoff"
 # shellcheck disable=SC2016  # ${PCT_INT} is a template token, substituted below
 DIALOG_MSG='Context at ${PCT_INT}% — generate handoff snapshot to continue in a new session?'
@@ -58,6 +62,15 @@ USABLE+=("$CRIT")
 TOK=$(cat "$SENTINEL_DIR/${SESSION}.tok" 2>/dev/null)
 case "$TOK" in ''|*[!0-9]*) TOK=0 ;; esac
 
+# La misma escala que pinta la barra. Sin .tier se usa la conservadora: si no
+# sabemos qué modelo es, avisar de más es preferible a avisar de menos.
+TIER=$(cat "$SENTINEL_DIR/${SESSION}.tier" 2>/dev/null)
+if [ "$TIER" = "opus" ]; then
+  TOK_LEVELS=("${TOKEN_THRESHOLDS_OPUS[@]}")
+else
+  TOK_LEVELS=("${TOKEN_THRESHOLDS[@]}")
+fi
+
 # Cada nivel dispara por porcentaje O por tokens, lo que ocurra primero. El
 # sentinel se nombra por el nivel de porcentaje en ambos casos, así que un
 # mismo tramo no puede avisar dos veces por dos vías distintas.
@@ -65,7 +78,7 @@ THRESHOLD=0
 IDX=0
 for LEVEL in "${USABLE[@]}"; do
   TOK_LEVEL=0
-  [ "$IDX" -lt "${#TOKEN_THRESHOLDS[@]}" ] && TOK_LEVEL="${TOKEN_THRESHOLDS[$IDX]}"
+  [ "$IDX" -lt "${#TOK_LEVELS[@]}" ] && TOK_LEVEL="${TOK_LEVELS[$IDX]}"
   IDX=$(( IDX + 1 ))
   [ -f "$SENTINEL_DIR/handoff_w${LEVEL}_${SESSION}" ] && continue
   if [ "$PCT_INT" -ge "$LEVEL" ] || { [ "$TOK_LEVEL" -gt 0 ] && [ "$TOK" -ge "$TOK_LEVEL" ]; }; then
