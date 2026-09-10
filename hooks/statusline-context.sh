@@ -138,10 +138,12 @@ USAGE_TOKEN_CMD=${USAGE_TOKEN_CMD:-}
 # Alternativa para endpoints con credencial fija: header literal, tal cual va.
 # Si están los dos, manda este.
 USAGE_HEADER=${USAGE_HEADER:-}
-# Cada cuánto se refresca. El gasto mensual se mueve lento; con
-# refreshInterval=10 un TTL de 60 son 6 renders servidos de caché por cada
-# consulta real.
-USAGE_TTL=${USAGE_TTL:-60}
+# Cada cuánto se refresca. El gasto mensual se mueve lento, así que el techo
+# no lo pone la frescura del dato sino el gateway del otro lado: con
+# refreshInterval=10 un TTL de 120 son 12 renders servidos de caché por cada
+# consulta real, y como mucho 30 consultas por hora. Un endpoint con rate
+# limiting estrecho es la razón para subirlo más, no bajarlo.
+USAGE_TTL=${USAGE_TTL:-120}
 USAGE_TIMEOUT=${USAGE_TIMEOUT:-8}
 # A partir de cuántos segundos sin dato fresco la línea confiesa que el número
 # que muestra es viejo. Un dato de hace media hora pintado como si fuera de

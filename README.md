@@ -162,7 +162,8 @@ statusline every few seconds; a hung DNS lookup with an 8-second timeout would
 freeze the bar for 8 seconds, every minute, forever. The refresh runs detached
 in the background and the render always paints from cache — a fresh install
 shows `⏳ consultando el cupo…` for one interval and then the number. Requests
-are throttled by `USAGE_TTL` (60s) and serialized across concurrent sessions by
+are throttled by `USAGE_TTL` (120s — at most 30 an hour, and the knob to turn
+first if your gateway rate-limits) and serialized across concurrent sessions by
 an atomic lock that is reaped by age, so a fetch killed mid-flight cannot wedge
 the line permanently.
 
