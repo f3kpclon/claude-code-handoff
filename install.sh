@@ -19,6 +19,15 @@ DIALOG_TITLE="Claude Code — Handoff"
 # shellcheck disable=SC2016
 DIALOG_MSG='Context at ${PCT_INT}% — generate handoff snapshot to continue in a new session?'
 CONFIRM_MSG="💾 listo mi shan!! guarda'o el handoff"
+# Endpoint propio de consumo (opcional) — el que muestra el gasto acumulado de
+# la cuenta, que ni la suscripción ni la API key exponen en el payload.
+# Vacío = feature apagada: no se consulta nada y el statusline queda idéntico.
+# El installer los pregunta abajo si la terminal es interactiva; el entorno
+# manda por sobre lo que se escriba acá, para poder instalar sin preguntas.
+USAGE_URL="${HANDOFF_USAGE_URL-}"
+# Comando que IMPRIME el token, no el token. Un JWT rotativo vence; guardar el
+# literal en disco deja de funcionar a la media hora y sin avisar.
+USAGE_TOKEN_CMD="${HANDOFF_USAGE_TOKEN_CMD-}"
 # ─────────────────────────────────────────────────────────────────────────────
 
 echo "Installing Claude Code Handoff v${VERSION}..."
@@ -49,6 +58,30 @@ case "$OSTYPE" in
     ;;
 esac
 
+# ── Endpoint de consumo (opcional) ──────────────────────────────────────────
+# Se pregunta sólo con terminal interactiva EN AMBOS extremos. `[ -t 1 ]` no es
+# redundante: test.sh corre este installer capturando o redirigiendo stdout
+# pero hereda el stdin del usuario, así que sin esa segunda condición la suite
+# se quedaría colgada esperando una respuesta que nadie ve que le están pidiendo.
+if [ -z "$USAGE_URL" ] && [ "${HANDOFF_NO_PROMPT:-0}" != "1" ] && [ -t 0 ] && [ -t 1 ]; then
+  echo "Endpoint de consumo (opcional) — Enter para omitir."
+  echo "  Muestra el gasto acumulado de tu cuenta en el statusline."
+  read -r -p "  URL: " USAGE_URL || USAGE_URL=""
+  if [ -n "$USAGE_URL" ]; then
+    echo "  Comando que imprime el token de acceso (Enter si el endpoint es abierto)."
+    read -r -p "  Comando: " USAGE_TOKEN_CMD || USAGE_TOKEN_CMD=""
+  fi
+  echo ""
+fi
+
+if [ -n "$USAGE_URL" ]; then
+  case "$USAGE_URL" in
+    https://*) ;;
+    http://*)  echo "⚠ URL sin TLS — el token viajaría en claro por la red" ;;
+    *)         echo "⚠ URL sin esquema http(s):// — el statusline no va a poder consultarla" ;;
+  esac
+fi
+
 # ── Directories ──────────────────────────────────────────────────────────────
 SKILLS_DIR="$CLAUDE_DIR/skills"
 mkdir -p "$COMMANDS_DIR" "$HOOKS_DIR" "$SKILLS_DIR/handoff" "$SKILLS_DIR/handoff-protocol"
@@ -77,11 +110,13 @@ HANDOFF_TOKEN_THRESHOLDS_OPUS="$TOKEN_THRESHOLDS_OPUS" \
 HANDOFF_DIALOG_TITLE="$DIALOG_TITLE" \
 HANDOFF_DIALOG_MSG="$DIALOG_MSG" \
 HANDOFF_CONFIRM_MSG="$CONFIRM_MSG" \
-python3 - "$HOOKS_DIR/handoff-monitor.sh" "$SKILLS_DIR/handoff/SKILL.md" <<'PYEOF'
+HANDOFF_USAGE_URL_V="$USAGE_URL" \
+HANDOFF_USAGE_TOKEN_CMD_V="$USAGE_TOKEN_CMD" \
+python3 - "$HOOKS_DIR/handoff-monitor.sh" "$SKILLS_DIR/handoff/SKILL.md" "$HOOKS_DIR/statusline-context.sh" <<'PYEOF'
 import os, shlex, sys
 from pathlib import Path
 
-monitor, skill = Path(sys.argv[1]), Path(sys.argv[2])
+monitor, skill, statusline = (Path(a) for a in sys.argv[1:4])
 
 def replace_line(path, prefix, new_line):
     lines = path.read_text().splitlines()
@@ -103,8 +138,24 @@ replace_line(monitor, 'TOKEN_THRESHOLDS_OPUS=', f'TOKEN_THRESHOLDS_OPUS=({os.env
 replace_line(monitor, 'DIALOG_TITLE=', f'DIALOG_TITLE={shlex.quote(os.environ["HANDOFF_DIALOG_TITLE"])}')
 replace_line(monitor, 'DIALOG_MSG=',   f'DIALOG_MSG={shlex.quote(os.environ["HANDOFF_DIALOG_MSG"])}')
 replace_line(skill,   '💾 ',           os.environ['HANDOFF_CONFIRM_MSG'])
+
+# El endpoint se inyecta CONSERVANDO el ${VAR:-default}: sobreescribir la línea
+# con el valor pelado mataría el override por entorno, y cambiar de URL o de
+# comando obligaría a reinstalar en vez de exportar una variable.
+for var, env in (('USAGE_URL', 'HANDOFF_USAGE_URL_V'),
+                 ('USAGE_TOKEN_CMD', 'HANDOFF_USAGE_TOKEN_CMD_V')):
+    replace_line(statusline, var + '=',
+                 '%s=${%s:-%s}' % (var, var, shlex.quote(os.environ.get(env, ''))))
 PYEOF
 chmod +x "$HOOKS_DIR/statusline-context.sh" "$HOOKS_DIR/handoff-monitor.sh" "$HOOKS_DIR/pre-compact.sh"
+if [ -n "$USAGE_URL" ]; then
+  echo "✓ endpoint de consumo: $USAGE_URL"
+  if [ -z "$USAGE_TOKEN_CMD" ]; then
+    echo "  (sin comando de token — si el endpoint pide auth, la línea va a mostrar HTTP 401)"
+  fi
+else
+  echo "• endpoint de consumo: no configurado (la línea de cupo mensual no se pinta)"
+fi
 echo "✓ hooks installed (thresholds: ${THRESHOLDS} · tokens: ${TOKEN_THRESHOLDS} · opus: ${TOKEN_THRESHOLDS_OPUS})"
 
 # ── CLAUDE.md — append or upgrade protocol ───────────────────────────────────
@@ -264,6 +315,9 @@ echo "Done. Restart Claude Code to activate."
 echo ""
 echo "What to expect:"
 echo "  • Status bar shows context usage on every response"
+if [ -n "$USAGE_URL" ]; then
+  echo "  • Status bar shows monthly account spend, refreshed in the background"
+fi
 # Derivado de $THRESHOLDS, NO escrito a mano: este texto ya quedó mintiendo una
 # vez (decía 70/80/90 después de que los cortes bajaran a 60/75) y nadie se
 # entera, porque el installer imprime igual de convencido con el número viejo.

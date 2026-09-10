@@ -121,6 +121,42 @@ CB70_DOT="🔪"; CB70_MSG="ojo que se va la plata"
 CB50_DOT="🔥"; CB50_MSG="media sesión de presupuesto"
 CB30_DOT="😎"; CB30_MSG="tranqui, hay billete"
 CB00_DOT="😈"; CB00_MSG="recién parti'o, cero gasto"
+
+# Cupo mensual (endpoint propio de consumo)
+# Ni la suscripción ni la API key exponen el gasto ACUMULADO de la cuenta: el
+# payload trae el costo de esta sesión y nada más. Quien pasa por un proxy con
+# cuota mensual tiene ese número en su propio endpoint, y sin esto el statusline
+# no puede verlo — que es justo el número que decide si mañana hay presupuesto.
+#
+# Vacío = apagado. Nada se consulta, ninguna línea se pinta, cero red.
+# El installer lo pregunta al instalar; estas variables aceptan override por
+# entorno para no tener que reinstalar al cambiarlo.
+USAGE_URL=${USAGE_URL:-}
+# Comando que IMPRIME el token (no el token: un JWT rotativo vence, un literal
+# en disco no se renueva solo). Se ejecuta sólo cuando toca refrescar.
+USAGE_TOKEN_CMD=${USAGE_TOKEN_CMD:-}
+# Alternativa para endpoints con credencial fija: header literal, tal cual va.
+# Si están los dos, manda este.
+USAGE_HEADER=${USAGE_HEADER:-}
+# Cada cuánto se refresca. El gasto mensual se mueve lento; con
+# refreshInterval=10 un TTL de 60 son 6 renders servidos de caché por cada
+# consulta real.
+USAGE_TTL=${USAGE_TTL:-60}
+USAGE_TIMEOUT=${USAGE_TIMEOUT:-8}
+# A partir de cuántos segundos sin dato fresco la línea confiesa que el número
+# que muestra es viejo. Un dato de hace media hora pintado como si fuera de
+# ahora es peor que no tener línea.
+USAGE_STALE_AFTER=${USAGE_STALE_AFTER:-900}
+USAGE_BLOCKED_DOT="🚫"; USAGE_BLOCKED_MSG="cuenta bloqueada — no pasa ni una más"
+UM90_DOT="🆘"; UM90_MSG="quedando pato con el mes weón"
+UM80_DOT="💀"; UM80_MSG="casi sin cupo mensual"
+UM70_DOT="🔪"; UM70_MSG="ojo que se acaba el mes"
+UM50_DOT="🔥"; UM50_MSG="medio mes consumido"
+UM30_DOT="😎"; UM30_MSG="tranqui, queda mes"
+UM00_DOT="😈"; UM00_MSG="mes entero por delante"
+# Estados que NO son un tramo de la escala. Existen porque una consulta de red
+# tiene formas de morir que un porcentaje no tiene, y todas deben verse.
+USAGE_ERR_DOT="⚠️";  USAGE_WAIT_DOT="⏳"; USAGE_WAIT_MSG="consultando el cupo…"
 # ─────────────────────────────────────────────────────────────────────────────
 
 input=$(cat)
@@ -481,5 +517,191 @@ if [ "$COST_BUDGET" != "0" ] && [ -z "$FIVE_H" ] && [ -z "$SEVEN_D" ]; then
         printf "💵 Presupuesto    %s %s[%s] %s%% — $%.2f / $%s — %s%s\n" \
             "$dot" "$color" "$(make_bar "$cb_bar")" "$cb_int" \
             "$COST" "$COST_BUDGET" "$msg" "$RESET"
+    fi
+fi
+
+# ── Line 6: Cupo mensual — sólo si hay endpoint configurado ──────────────────
+# La única línea del statusline que sale a la red, y eso cambia todo lo demás:
+#
+#  · NO puede consultar en el camino del render. El statusline corre cada
+#    refreshInterval segundos; un DNS colgado con -m 8 congelaría la barra 8
+#    segundos, cada minuto, para siempre. El refresco se dispara en segundo
+#    plano y el render pinta SIEMPRE lo que haya en caché — nunca espera.
+#  · NO puede desaparecer al fallar. Una línea que se apaga sola es idéntica a
+#    una que nunca se configuró, y el día que el token deje de renovarse nadie
+#    se enteraría. Configurada = visible, aunque sea para decir que está rota.
+#  · El token NO puede ir en argv. `curl(1) -H "Bearer $tok"` deja
+#    la credencial a la vista de cualquier `ps` de la máquina. Va por un archivo
+#    de config con permisos 0700, dentro del propio lock.
+if [ -n "$USAGE_URL" ]; then
+    USAGE_FILE="$HOME/.claude/usage.json"
+    USAGE_LOCK="$CTX_DIR/.usage.lock"
+
+    # Refresca y deja el resultado en $USAGE_FILE. Corre en segundo plano.
+    usage_fetch() {
+        local tok hdr cfg body code rc prev_data prev_fetched now_ts out
+        cfg="$USAGE_LOCK/req"; body="$USAGE_LOCK/body"; out="$USAGE_LOCK/out"
+
+        hdr="$USAGE_HEADER"
+        if [ -z "$hdr" ] && [ -n "$USAGE_TOKEN_CMD" ]; then
+            # bash -c y no eval: el scan de seguridad del CI lo rechaza, y
+            # tiene razón — acá alcanza con ejecutar el comando tal cual, que
+            # además expande el ~ del path igual que lo haría el usuario.
+            tok=$(bash -c "$USAGE_TOKEN_CMD" 2>/dev/null | tr -d '\r\n')
+            # En el archivo de config de curl, " y \ son sintaxis. Ningún JWT
+            # los lleva, pero un token roto no puede convertirse en opciones.
+            tok=${tok//\"/}; tok=${tok//\\/}
+            [ -n "$tok" ] && hdr="Authorization: Bearer $tok"
+        fi
+
+        {
+            printf 'url = "%s"\n' "${USAGE_URL//\"/}"
+            printf 'output = "%s"\n' "$body"
+            printf 'silent\n'
+            printf 'max-time = %s\n' "$USAGE_TIMEOUT"
+            printf 'write-out = "%%{http_code}"\n'
+            [ -n "$hdr" ] && printf 'header = "%s"\n' "$hdr"
+        } > "$cfg"
+
+        # La consulta, y la única: un GET sin cuerpo al endpoint que el
+        # usuario configuró. La marca de abajo la exime del scan del CI y va
+        # en la misma línea porque el scan filtra línea por línea.
+        code=$(curl -K "$cfg" 2>/dev/null); rc=$?  # net-allow: consulta de cupo
+        rm -f "$cfg"
+
+        now_ts=$(date +%s)
+        # El último dato bueno sobrevive al error: "$98.88 — hace 6m ⚠ HTTP 401"
+        # informa; borrarlo y mostrar sólo el error tira a la basura el único
+        # número que el usuario quería ver.
+        prev_data='null'; prev_fetched=0
+        if [ -f "$USAGE_FILE" ]; then
+            prev_data=$(jq -c '.data // null' "$USAGE_FILE" 2>/dev/null || echo null)
+            prev_fetched=$(jq -r '.fetched_at // 0' "$USAGE_FILE" 2>/dev/null || echo 0)
+        fi
+        case "$prev_fetched" in ''|*[!0-9]*) prev_fetched=0 ;; esac
+
+        usage_write_err() {  # $1 = mensaje visible
+            jq -n -c --argjson at "$now_ts" --argjson pf "$prev_fetched" \
+                     --argjson d "$prev_data" --arg e "$1" \
+                '{ok:false, checked_at:$at, fetched_at:$pf, error:$e, data:$d}' \
+                > "$out" 2>/dev/null && mv -f "$out" "$USAGE_FILE"
+        }
+
+        if [ "$rc" -ne 0 ]; then
+            # 28 = timeout, 6 = DNS, 7 = conexión rechazada. El número importa:
+            # es la diferencia entre "no hay red" y "el endpoint se cayó".
+            usage_write_err "sin respuesta (curl:$rc)"; return
+        fi
+        # file:// devuelve 000 y no es un error — es como se prueba esto sin red.
+        case "$code" in
+            200|000) ;;
+            401|403) usage_write_err "HTTP $code — token rechazado"; return ;;
+            *)       usage_write_err "HTTP $code"; return ;;
+        esac
+        # Un 401 devuelve JSON válido ({"message":"Unauthorized"}) con rc 0. Que
+        # parsee no prueba nada: lo que se exige es que traiga alguno de los
+        # campos que esta línea necesita, o el render pintaría un 0% inventado.
+        if ! jq -e 'type=="object" and ((.percentUsed? // .spentUsd? // .limitUsd?) != null)' \
+             "$body" >/dev/null 2>&1; then
+            usage_write_err "respuesta sin campos de cupo"; return
+        fi
+        jq -c --argjson at "$now_ts" '{ok:true, checked_at:$at, fetched_at:$at, error:"", data:.}' \
+            "$body" > "$out" 2>/dev/null && mv -f "$out" "$USAGE_FILE"
+    }
+
+    # ── Disparo del refresco ─────────────────────────────────────────────────
+    # mkdir es atómico: con varias sesiones abiertas (y un render cada 10s) sólo
+    # una consulta a la vez. El lock viejo se recoge por edad — un fetch muerto
+    # no puede dejar la línea congelada para siempre.
+    u_checked=0
+    [ -f "$USAGE_FILE" ] && u_checked=$(jq -r '.checked_at // 0' "$USAGE_FILE" 2>/dev/null)
+    case "$u_checked" in ''|*[!0-9]*) u_checked=0 ;; esac
+
+    if [ $(( NOW - u_checked )) -ge "$USAGE_TTL" ]; then
+        [ -d "$CTX_DIR" ] || mkdir -p "$CTX_DIR"
+        if [ -d "$USAGE_LOCK" ]; then
+            lock_ts=$(file_mtime "$USAGE_LOCK")
+            [ $(( NOW - lock_ts )) -ge $(( USAGE_TIMEOUT + 20 )) ] && rm -rf "$USAGE_LOCK"
+        fi
+        if mkdir -m 700 "$USAGE_LOCK" 2>/dev/null; then
+            # `( ... & )` desacopla: el subshell intermedio muere al instante y
+            # el fetch queda huérfano corriendo solo. Sin esto el statusline
+            # esperaría al hijo y volveríamos al render bloqueante.
+            ( ( usage_fetch; rm -rf "$USAGE_LOCK" ) >/dev/null 2>&1 </dev/null & )
+        fi
+    fi
+
+    # ── Render ───────────────────────────────────────────────────────────────
+    # Mismo `// ""` que el parse principal y por el mismo motivo: con `// empty`
+    # jq omite la línea del campo ausente y todos los de abajo suben una
+    # posición, sin error y sin ruido.
+    if [ -f "$USAGE_FILE" ]; then
+        U_OUT=$(jq -r '
+          (.ok // false | tostring),
+          (.error // ""),
+          ((.data.percentUsed //
+            (if ((.data.limitUsd // 0) > 0)
+             then ((.data.spentUsd // 0) * 100 / .data.limitUsd) else "" end)) // ""),
+          (.data.spentUsd // ""),
+          (.data.limitUsd // ""),
+          ((.data.remainingUsd //
+            (if ((.data.limitUsd // null) != null and (.data.spentUsd // null) != null)
+             then (.data.limitUsd - .data.spentUsd) else "" end)) // ""),
+          (.data.blocked // false | tostring),
+          (.fetched_at // 0)
+        ' "$USAGE_FILE" 2>/dev/null)
+        {
+            IFS= read -r U_OK
+            IFS= read -r U_ERR
+            IFS= read -r U_PCT
+            IFS= read -r U_SPENT
+            IFS= read -r U_LIMIT
+            IFS= read -r U_REM
+            IFS= read -r U_BLOCKED
+            IFS= read -r U_FETCHED
+        } <<< "$U_OUT"
+    else
+        U_OK=false; U_ERR=""; U_PCT=""; U_SPENT=""; U_LIMIT=""; U_REM=""
+        U_BLOCKED=false; U_FETCHED=0
+    fi
+    case "${U_FETCHED:-0}" in ''|*[!0-9]*) U_FETCHED=0 ;; esac
+
+    if [ -z "$U_PCT" ]; then
+        # Sin ningún dato todavía. Si además hay error, se dice cuál: "no
+        # aparece la línea" y "la línea dice HTTP 401" son diagnósticos muy
+        # distintos para quien tiene que arreglarlo.
+        if [ -n "$U_ERR" ]; then
+            echo "💳 Cupo mensual   ${USAGE_ERR_DOT} ${RED}sin datos — ${U_ERR}${RESET}"
+        else
+            echo "💳 Cupo mensual   ${USAGE_WAIT_DOT} ${USAGE_WAIT_MSG}"
+        fi
+    else
+        u_int=$(( ${U_PCT%.*} ))
+        u_bar=$u_int; [ "$u_bar" -gt 100 ] && u_bar=100
+        if   [ "$U_BLOCKED" = "true" ]; then color="$RED"; dot="$USAGE_BLOCKED_DOT"; msg="$USAGE_BLOCKED_MSG"
+        elif [ "$u_int" -ge 90 ]; then color="$RED";    dot="$UM90_DOT"; msg="$UM90_MSG"
+        elif [ "$u_int" -ge 80 ]; then color="$RED";    dot="$UM80_DOT"; msg="$UM80_MSG"
+        elif [ "$u_int" -ge 70 ]; then color="$RED";    dot="$UM70_DOT"; msg="$UM70_MSG"
+        elif [ "$u_int" -ge 50 ]; then color="$YELLOW"; dot="$UM50_DOT"; msg="$UM50_MSG"
+        elif [ "$u_int" -ge 30 ]; then color="$GREEN";  dot="$UM30_DOT"; msg="$UM30_MSG"
+        else                          color="$GREEN";  dot="$UM00_DOT"; msg="$UM00_MSG"
+        fi
+
+        # Sufijos: el dato viejo y el error se ANEXAN al número en vez de
+        # reemplazarlo. Se ve el último valor conocido Y que ya no es de fiar.
+        U_SUFFIX=""
+        u_age=$(( NOW - U_FETCHED ))
+        if [ "$U_FETCHED" -gt 0 ] && [ "$u_age" -ge "$USAGE_STALE_AFTER" ]; then
+            fmt_left "$u_age"
+            U_SUFFIX=" · dato de hace ${FMT_LEFT}"
+        fi
+        [ "$U_OK" != "true" ] && [ -n "$U_ERR" ] && U_SUFFIX="${U_SUFFIX} · ${USAGE_ERR_DOT} ${U_ERR}"
+
+        printf -v U_SPENT_FMT '$%.2f' "${U_SPENT:-0}"
+        U_REM_FMT=""
+        [ -n "$U_REM" ] && printf -v U_REM_FMT ' — queda $%.2f' "$U_REM"
+        printf "💳 Cupo mensual   %s %s[%s] %s%% — %s / \$%s%s — %s%s%s\n" \
+            "$dot" "$color" "$(make_bar "$u_bar")" "$u_int" \
+            "$U_SPENT_FMT" "${U_LIMIT:-?}" "$U_REM_FMT" "$msg" "$U_SUFFIX" "$RESET"
     fi
 fi

@@ -876,6 +876,213 @@ printf '{"model":{"id":"o"},"workspace":{"current_dir":"/nonexistent-cb"},"conte
   && pass "un payload sin cost no rompe la línea" \
   || fail "payload sin cost rompió el presupuesto"
 
+# ── Cupo mensual (endpoint propio) ────────────────────────────────────────────
+echo ""
+echo "Cupo mensual (endpoint de consumo)"
+
+U_HOME=$(mktemp -d)
+mkdir -p "$U_HOME/.claude"
+U_PAYLOAD='{"model":{"id":"o"},"workspace":{"current_dir":"/nonexistent-um"},"cost":{"total_cost_usd":0.5},"context_window":{"used_percentage":12},"session_id":"um"}'
+
+# Render determinista: la caché se siembra a mano y el TTL se pone absurdamente
+# alto para que NINGÚN fetch se dispare. Así estas aserciones no dependen de la
+# red, del reloj, ni de que un hijo en segundo plano alcance a terminar.
+u_seed() {  # $1 = json de .data, $2 = ok, $3 = error, $4 = antigüedad en segundos
+  jq -n -c --argjson d "$1" --argjson ok "$2" --arg e "$3" \
+           --argjson at "$(( $(date +%s) - ${4:-0} ))" \
+    '{ok:$ok, checked_at:$at, fetched_at:(if $ok then $at else 0 end), error:$e, data:$d}' \
+    > "$U_HOME/.claude/usage.json"
+}
+u_seed_err_with_data() {  # error PERO conservando un dato previo de $2 segundos atrás
+  jq -n -c --argjson d "$1" --arg e "$2" \
+           --argjson now "$(date +%s)" --argjson old "$(( $(date +%s) - ${3:-60} ))" \
+    '{ok:false, checked_at:$now, fetched_at:$old, error:$e, data:$d}' \
+    > "$U_HOME/.claude/usage.json"
+}
+u_render() { echo "$U_PAYLOAD" | HOME="$U_HOME" COLUMNS=80 USAGE_TTL=999999 USAGE_URL="${1:-file:///dev/null}" bash "$SL" 2>/dev/null | grep 'Cupo mensual' || true; }
+
+# La regresión que más importa: sin endpoint configurado esto no existe. Ni la
+# línea, ni la consulta, ni un archivo de caché. Instalar la nueva versión sin
+# tocar nada tiene que dejar el statusline byte por byte como estaba.
+NO_URL=$(echo "$U_PAYLOAD" | HOME="$U_HOME" COLUMNS=80 bash "$SL" 2>/dev/null)
+echo "$NO_URL" | grep -q 'Cupo mensual' \
+  && fail "pintó la línea sin USAGE_URL configurado" \
+  || pass "sin endpoint configurado no se pinta la línea"
+
+# La respuesta documentada del endpoint, tal cual.
+u_seed '{"month":"2026-09","spentUsd":1.12,"limitUsd":100,"remainingUsd":98.88,"percentUsed":1.1,"blocked":false}' true "" 0
+out=$(u_render)
+echo "$out" | grep -q '1%' \
+  && pass "porcentaje mensual del endpoint" || fail "porcentaje mensual mal leído"
+# shellcheck disable=SC2016  # $1.12 y $100 son literales que buscamos, no expansiones
+echo "$out" | grep -q '\$1.12 / \$100' \
+  && pass "gasto y límite en la línea" || fail "falta gasto/límite"
+# shellcheck disable=SC2016
+echo "$out" | grep -q 'queda \$98.88' \
+  && pass "crédito restante en la línea" || fail "falta el restante"
+
+# percentUsed ausente: se calcula de spent/limit en vez de rendirse. Un endpoint
+# que no manda el porcentaje sigue teniendo toda la información para pintarlo.
+u_seed '{"spentUsd":50,"limitUsd":200}' true "" 0
+out=$(u_render)
+echo "$out" | grep -q '25%' \
+  && pass "porcentaje derivado cuando el endpoint no lo manda" \
+  || fail "no derivó el porcentaje de spent/limit"
+
+# blocked es un estado, no un tramo: manda por sobre el porcentaje. Una cuenta
+# bloqueada al 12% no puede pintarse "tranqui, queda mes".
+u_seed '{"spentUsd":12,"limitUsd":100,"percentUsed":12,"blocked":true}' true "" 0
+out=$(u_render)
+echo "$out" | grep -q '🚫' \
+  && pass "blocked manda por sobre el porcentaje" || fail "blocked ignorado"
+echo "$out" | grep -q 'tranqui, queda mes' \
+  && fail "una cuenta bloqueada se pintó como tranquila" \
+  || pass "blocked no reusa el mensaje del tramo bajo"
+
+# EL fallo silencioso. Una línea que se apaga al fallar es indistinguible de una
+# que nunca se configuró: el día que el token deje de renovarse, nadie se entera.
+u_seed 'null' false "HTTP 401 — token rechazado" 0
+out=$(u_render)
+[ -n "$out" ] \
+  && pass "un error NO borra la línea" || fail "la línea desapareció al fallar"
+echo "$out" | grep -q '401' \
+  && pass "el error dice cuál fue" || fail "el error no se identifica"
+
+# El último dato bueno sobrevive al error, y el error se anexa en vez de
+# reemplazarlo: se ve el número Y que ya no es de fiar.
+u_seed_err_with_data '{"spentUsd":40,"limitUsd":100,"percentUsed":40}' "HTTP 401 — token rechazado" 60
+out=$(u_render)
+echo "$out" | grep -q '40%' \
+  && pass "el último dato bueno sobrevive al error" || fail "el error tiró el dato previo"
+echo "$out" | grep -q '⚠' \
+  && pass "el dato viejo viene marcado como no confiable" || fail "dato stale sin marca"
+
+# Dato viejo aunque el fetch diga OK: si el reloj avanzó y nadie refrescó, la
+# línea lo confiesa. Un número de hace media hora pintado como fresco miente.
+u_seed '{"spentUsd":40,"limitUsd":100,"percentUsed":40}' true "" 3600
+out=$(u_render)
+echo "$out" | grep -q 'dato de hace 1h00m' \
+  && pass "un dato añejo declara su edad" || fail "dato añejo se pintó como fresco"
+
+# ── El camino real: fetch, caché y validación de la respuesta ────────────────
+# file:// en vez de red: ejercita curl, el lock, la escritura atómica y el
+# parseo sin depender de que el runner del CI tenga salida a internet.
+U_LOCK="$U_HOME/.claude/ctx/.usage.lock"
+u_fetch() {  # $1 = url · UNA consulta, y se espera a que el hijo termine
+  rm -rf "$U_LOCK"; rm -f "$U_HOME/.claude/usage.json"
+  # Un solo render: sin caché el primero siempre dispara el fetch. Renderizar
+  # en bucle con TTL=0 lanzaba varias consultas a la vez y una rezagada pisaba
+  # el archivo DESPUÉS del rm del caso siguiente — el test se contaminaba solo.
+  echo "$U_PAYLOAD" | HOME="$U_HOME" COLUMNS=80 USAGE_TTL=0 USAGE_URL="$1" bash "$SL" >/dev/null 2>&1
+  # El hijo escribe la caché y recién después suelta el lock: esperar al lock
+  # garantiza que no queda ningún fetch en vuelo. La espera es acotada, así que
+  # un lock que de verdad se trabe sigue fallando el test de abajo.
+  local n=0
+  while [ -d "$U_LOCK" ] && [ "$n" -lt 40 ]; do sleep 0.25; n=$((n+1)); done
+  [ -f "$U_HOME/.claude/usage.json" ]
+}
+
+echo '{"spentUsd":7.5,"limitUsd":50,"percentUsed":15}' > "$U_HOME/real.json"
+if u_fetch "file://$U_HOME/real.json"; then
+  pass "el fetch en segundo plano escribe la caché"
+  jq -e '.ok == true and .data.spentUsd == 7.5' "$U_HOME/.claude/usage.json" >/dev/null 2>&1 \
+    && pass "la caché guarda la respuesta del endpoint" || fail "caché con contenido incorrecto"
+else
+  fail "el fetch en segundo plano nunca escribió la caché"
+  fail "la caché guarda la respuesta del endpoint (no ejecutado)"
+fi
+
+# Un 401 devuelve JSON VÁLIDO: {"message":"Unauthorized"}. Que parsee no prueba
+# nada. Sin este chequeo el render pintaría un 0% inventado con cara de dato
+# real — el peor resultado posible de los tres.
+echo '{"message":"Unauthorized"}' > "$U_HOME/junk.json"
+if u_fetch "file://$U_HOME/junk.json"; then
+  jq -e '.ok == false' "$U_HOME/.claude/usage.json" >/dev/null 2>&1 \
+    && pass "una respuesta sin campos de cupo se trata como error" \
+    || fail "aceptó como válida una respuesta sin campos de cupo"
+  out=$(u_render)
+  echo "$out" | grep -q '0%' \
+    && fail "pintó un 0% inventado con una respuesta inválida" \
+    || pass "no inventa un 0% cuando la respuesta no sirve"
+else
+  fail "no se escribió caché para la respuesta inválida"
+  fail "no inventa un 0% (no ejecutado)"
+fi
+
+# El endpoint inalcanzable no puede colgar el render ni dejar el lock tomado:
+# un lock huérfano congelaría la línea para siempre.
+u_fetch "file://$U_HOME/no-existe.json" >/dev/null 2>&1 || true
+[ ! -d "$U_LOCK" ] \
+  && pass "el lock se libera aunque el fetch falle" || fail "quedó un lock huérfano"
+
+# El token no puede ir en argv: `curl(1) -H "Bearer ..."` lo deja a la vista de
+# cualquier `ps` de la máquina. Se exige la forma con archivo de config.
+grep -qE 'curl[[:space:]]-K' "$SL" \
+  && pass "la credencial va por archivo de config, no por argv" \
+  || fail "el token podría estar viajando en la línea de comandos"
+grep -qE 'curl[[:space:]].*-H[[:space:]].*Authorization' "$SL" \
+  && fail "hay un header con credencial en argv" \
+  || pass "ningún header con credencial en argv"
+
+# El installer inyecta la URL SIN matar el override por entorno: cambiar de
+# endpoint no puede obligar a reinstalar.
+UI_HOME=$(mktemp -d)
+HOME="$UI_HOME" HANDOFF_USAGE_URL="https://ejemplo.test/usage" \
+  HANDOFF_USAGE_TOKEN_CMD="mi-token" bash "$SCRIPT_DIR/install.sh" >/dev/null 2>&1 </dev/null || true
+UI_SL="$UI_HOME/.claude/hooks/statusline-context.sh"
+# shellcheck disable=SC2016  # ${USAGE_URL:-...} es el literal que debe estar en el archivo
+grep -q '^USAGE_URL=${USAGE_URL:-https://ejemplo.test/usage}' "$UI_SL" \
+  && pass "el installer inyecta la URL conservando el override" \
+  || fail "la URL inyectada no conserva el override por entorno"
+# shellcheck disable=SC2016  # idem: literal, no expansión
+grep -q '^USAGE_TOKEN_CMD=${USAGE_TOKEN_CMD:-mi-token}' "$UI_SL" \
+  && pass "el installer inyecta el comando de token" \
+  || fail "comando de token no inyectado"
+
+# Sin endpoint el installer deja las variables vacías — instalar no puede
+# encender una feature que nadie pidió.
+UI2_HOME=$(mktemp -d)
+HOME="$UI2_HOME" bash "$SCRIPT_DIR/install.sh" >/dev/null 2>&1 </dev/null || true
+grep -q "^USAGE_URL=\${USAGE_URL:-''}" "$UI2_HOME/.claude/hooks/statusline-context.sh" \
+  && pass "sin endpoint el installer deja la feature apagada" \
+  || fail "el installer encendió el endpoint sin configuración"
+
+# El prompt sólo puede existir con terminal en los DOS extremos, y un EOF ahí
+# no puede matar la instalación. `read` devuelve 1 al recibir EOF (Ctrl-D, o un
+# stdin cerrado) y bajo `set -e` eso abortaba el installer justo después de
+# anunciar que instalaba y antes de copiar un solo archivo. Se prueba con un pty
+# de verdad: sin terminal el prompt ni siquiera se evalúa y el bug no aparece.
+UI3_HOME=$(mktemp -d)
+UI3_OUT=$(HOME="$UI3_HOME" python3 - "$SCRIPT_DIR" <<'PY'
+import os, pty, select, subprocess, sys, time
+m, s = pty.openpty()
+p = subprocess.Popen(["bash", "install.sh"], cwd=sys.argv[1],
+                     stdin=s, stdout=s, stderr=s, close_fds=True)
+os.close(s)
+os.close(os.dup(m)); os.write(m, b"\x04")   # EOF inmediato en el primer prompt
+deadline = time.time() + 60
+while time.time() < deadline and p.poll() is None:
+    r, _, _ = select.select([m], [], [], 0.4)
+    if r:
+        try:
+            if not os.read(m, 4096):
+                break
+        except OSError:
+            break
+p.wait(timeout=15)
+print(p.returncode)
+PY
+)
+[ "$UI3_OUT" = "0" ] \
+  && pass "un EOF en el prompt no aborta la instalación" \
+  || fail "el installer murió con un EOF en el prompt (rc=$UI3_OUT)"
+[ -f "$UI3_HOME/.claude/hooks/statusline-context.sh" ] \
+  && pass "tras el EOF los archivos igual quedan instalados" \
+  || fail "el EOF dejó la instalación a medias"
+
+rm -rf "$UI3_HOME"
+rm -rf "$U_HOME" "$UI_HOME" "$UI2_HOME"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
