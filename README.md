@@ -2,11 +2,14 @@
 
 Preserves context between Claude Code sessions. Detects when context is running low, shows a native OS dialog, generates a structured snapshot silently to disk, and copies it to your clipboard so you can paste it into the next session.
 
+Along the way it replaces the status bar with one that tells you how much room you have left — context, plan quotas, session spend, and optionally your account's monthly spend from your own endpoint.
+
 ## Requirements
 
 - Claude Code
 - Python 3
 - jq (`brew install jq` / `sudo apt install jq`)
+- curl — **only** if you configure the optional usage endpoint. Without it every other line works normally, and the usage line says `⚠️ sin datos — sin respuesta (curl:127)` rather than vanishing
 - macOS, Linux (GNOME/KDE), or Windows (Git Bash / WSL)
 
 ## Install
@@ -18,6 +21,18 @@ bash install.sh
 ```
 
 Copies hooks and skills to `~/.claude/`, registers them in `settings.json`, and appends the handoff protocol to `CLAUDE.md`. The `handoff` skill doubles as the `/handoff` slash command. Restart Claude Code after installing.
+
+The installer asks one optional question — the usage endpoint (see
+[Monthly spend](#monthly-spend-your-own-usage-endpoint)). Press Enter to skip it
+and nothing about that feature is installed. The question only appears when both
+stdin and stdout are a terminal, so a piped or captured install never blocks
+waiting on an answer nobody can see; pass the values as environment variables
+there instead:
+
+```bash
+HANDOFF_USAGE_URL="https://your-gateway.example/usage" \
+HANDOFF_USAGE_TOKEN_CMD="~/.claude/bin/your-token" bash install.sh
+```
 
 ## How it works
 
@@ -340,6 +355,7 @@ To change after installing, edit the `# ── CUSTOMIZE` block in each file und
 | Usage endpoint token command | `hooks/statusline-context.sh` | `USAGE_TOKEN_CMD` |
 | Usage endpoint literal header | `hooks/statusline-context.sh` | `USAGE_HEADER` |
 | Usage refresh interval / timeout | `hooks/statusline-context.sh` | `USAGE_TTL`, `USAGE_TIMEOUT` |
+| Usage staleness warning | `hooks/statusline-context.sh` | `USAGE_STALE_AFTER` |
 | Monthly quota emoji + text | `hooks/statusline-context.sh` | `UM90_DOT`, `UM90_MSG`, etc. |
 
 ### Why these cut points
@@ -461,6 +477,18 @@ configure. Point it at your own gateway.
 
 **Branch protection** is active on this repo: all three checks must pass before any PR can merge, and direct pushes to `main` are restricted to the codeowner. For forks, enable it manually in GitHub → Settings → Branches.
 
+The rules also require one approving review from a code owner. On a
+single-maintainer repo that condition can never be met — GitHub does not let you
+approve your own pull request — so merges here go through the admin bypass
+(`enforce_admins` is off for exactly that reason):
+
+```bash
+gh pr merge <n> --squash --delete-branch --admin
+```
+
+The status checks are the gate that actually does work; the review requirement
+is there for the day this repo has a second maintainer.
+
 ## Repair
 
 If another tool modifies `~/.claude/settings.json` after installation (e.g. `codebase-indexer install`), it may overwrite the hooks registered by handoff. Re-running install is safe and re-registers any missing hooks without duplicating existing ones:
@@ -492,7 +520,13 @@ echo "$used" > ~/.claude/ctx_pct.txt   # $used = .context_window.used_percentage
 bash uninstall.sh
 ```
 
-Removes all hooks, the `/handoff` command, skills, and surgically cleans `settings.json` (only the entries handoff added — your other settings and any foreign statusline are untouched). Snapshots in `~/.claude/handoffs/` are preserved.
+Removes all hooks, the `/handoff` command, skills, and surgically cleans `settings.json` (only the entries handoff added — your other settings and any foreign statusline are untouched).
+
+Runtime state goes with it (`ctx/`, `ctx_pct.txt`, `ratelimit.json`,
+`usage.json`) because all of it rebuilds itself on the next render. Two things
+are deliberately kept: snapshots in `~/.claude/handoffs/`, and
+`ratelimit-history.jsonl`, which is the only record of where your quota windows
+fell and cannot be reconstructed.
 
 ## Files
 
@@ -501,9 +535,26 @@ Removes all hooks, the `/handoff` command, skills, and surgically cleans `settin
 | `CLAUDE.md` | Handoff protocol — triggers and resume behavior for Claude |
 | `skills/handoff/SKILL.md` | The `/handoff` command and auto-invoked skill — composes snapshot silently, writes to disk via Bash, prints one-line confirmation |
 | `skills/handoff-protocol/SKILL.md` | Snapshot format template — single source of truth, loaded by the handoff skill when composing |
-| `hooks/statusline-context.sh` | Renders the context progress bar in the status line |
+| `hooks/statusline-context.sh` | Renders the whole status bar — context, plan quotas, session budget, monthly usage — and writes the state the monitor reads |
 | `hooks/handoff-monitor.sh` | Fires after each response — shows dialog at thresholds |
 | `hooks/pre-compact.sh` | Saves a bash-only mini-snapshot before auto-compaction |
 | `test.sh` | 144 assertions — snapshot logic, install idempotency, PreCompact, statusline safety, monitor thresholds, monthly-usage endpoint, CUSTOMIZE injection |
 | `install.sh` | Installs everything into `~/.claude/` |
 | `uninstall.sh` | Removes everything installed |
+
+### State written to `~/.claude/`
+
+Nothing here is configuration — it is all rebuilt automatically, and all of it
+except the last two rows is deleted by `uninstall.sh`.
+
+| Path | What it holds |
+|------|---------------|
+| `ctx/<session>.pct` `.tok` `.compact` `.tier` | Per-session context state. The monitor only sees files, so the statusline has to write down what it knows: percentage, tokens, the computed compaction ceiling and the model family |
+| `ctx/gitpart_*` | Cached git branch + counters, 3s TTL |
+| `ctx/.housekeeping` | Timestamp throttling the hourly sweep of stale session files |
+| `ctx/.usage.lock` | Held while a usage fetch is in flight; reaped by age |
+| `ctx_pct.txt` | Legacy global percentage, kept for hand-rolled statuslines |
+| `ratelimit.json` | Last observed quota windows, written at most every 30s |
+| `usage.json` | Last usage-endpoint response, plus when it was last checked and the last error |
+| `ratelimit-history.jsonl` | **Kept on uninstall** — append-only log of quota window boundaries |
+| `handoffs/<repo>/` | **Kept on uninstall** — your snapshots |
