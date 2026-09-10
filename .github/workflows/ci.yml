@@ -40,10 +40,17 @@ jobs:
           SENSITIVE_FILES=$(find hooks/ skills/ install.sh uninstall.sh test.sh -type f 2>/dev/null)
           FOUND=0
 
+          # Una línea marcada con `# net-allow:` queda exenta. La feature de cupo
+          # mensual ES una llamada saliente: sin exención el gate obliga a
+          # borrarlo entero, y borrarlo deja de avisar del resto. La marca es
+          # estrecha a propósito — exime esa línea y ninguna otra, aparece en el
+          # diff de cualquier PR y el control real sigue siendo CODEOWNERS +
+          # branch protection.
           scan() {
             local pattern="$1"
             local label="$2"
             while IFS= read -r hit; do
+              case "$hit" in *'# net-allow:'*) continue ;; esac
               echo "⚠ $label → $hit"
               FOUND=$((FOUND+1))
             done < <(grep -rnE "$pattern" $SENSITIVE_FILES 2>/dev/null)
@@ -55,6 +62,13 @@ jobs:
           scan '/dev/tcp'              'raw TCP connection'
           scan '(^|[^[:alnum:]])nc '   'netcat'
           scan 'python3 -c.*exec'      'dynamic python exec'
+          # No exentables: la marca `# net-allow:` cubre el GET de consulta y
+          # nada más. Cualquier cosa que MANDE datos hacia afuera falla igual,
+          # marcada o no — es la diferencia entre consultar y exfiltrar.
+          while IFS= read -r hit; do
+            echo "⚠ outbound upload (never allowed) → $hit"
+            FOUND=$((FOUND+1))
+          done < <(grep -rnE '(--data|--form|-X[[:space:]]*(POST|PUT|PATCH)|--upload-file)' $SENSITIVE_FILES 2>/dev/null)
           scan '(^|[^[:alnum:]])eval ' 'dynamic eval'
 
           if [ "$FOUND" -gt 0 ]; then

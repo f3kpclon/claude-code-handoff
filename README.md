@@ -23,7 +23,7 @@ Copies hooks and skills to `~/.claude/`, registers them in `settings.json`, and 
 
 ```
 Every response      → status bar shows live context usage
-At 70 / 80 / 90%   → native OS dialog: "Generate snapshot?"
+At 60 / 75%         → native OS dialog: "Generate snapshot?"
 User clicks Yes     → Claude composes snapshot internally (not shown in chat)
 Bash writes to disk → ~/.claude/handoffs/{repo-name}/YYYY-MM-DD_HHmm.md + latest.md
                       directory created automatically if it doesn't exist
@@ -38,19 +38,21 @@ New session         → paste snapshot → Claude confirms and resumes
 
 ### Status bar
 
-The status bar renders up to 4 lines depending on your plan:
+The status bar renders up to 6 lines depending on your plan and configuration:
 
 ```
 [claude-sonnet-4-6] | Branch: 🌿 main +1 ~2 | 💰 $0.03
 🧠 Contexto       😈 [████████░░░░░░░░░░░░] 45% — listo mi guasho!
 ⏱ Cupo horario   🔪 [███████████████░░░░░] 75% — 1h12m — se acaba el turno weón
 📅 Cupo semanal  😎 [████░░░░░░░░░░░░░░░░] 23% — tranqui, semana larga
+💳 Cupo mensual  😎 [███████░░░░░░░░░░░░░] 34% — $34.10 / $100 — queda $65.90 — tranqui, queda mes
 ```
 
 **Line 1** — always shown: active model ID, git branch + staged/modified count, session cost.  
 **Line 2** — always shown: session context window usage bar.  
 **Lines 3–4** — Pro/Max only: 5-hour rolling quota and 7-day weekly quota bars.  
-**Line 5** — API key only: session spend against a budget you set (see below).
+**Line 5** — API key only: session spend against a budget you set (see below).  
+**Line 6** — only if you configure a usage endpoint: your account's month-to-date spend (see below).
 
 #### Spend budget (API key)
 
@@ -84,6 +86,99 @@ saturates but the percentage keeps climbing, so 118% never reads like 90%.
 | 80–90% | 💀 | casi sin presupuesto |
 | 90–100% | 🆘 | quedando pato, corta el chorro |
 | ≥ 100% | 🩸 | te pasaste del presupuesto weón |
+
+#### Monthly spend (your own usage endpoint)
+
+Every other line on the bar reads a number Claude Code already handed the
+statusline. This one is different: neither a subscription nor an API key exposes
+the account's **accumulated** spend in that payload — `cost.total_cost_usd` is
+this session and nothing more. If you go through a proxy or gateway that tracks
+a monthly quota, that number lives on its own endpoint, and this line is how the
+bar gets to see it.
+
+Point it at a URL that returns JSON and it renders line 6:
+
+```
+💳 Cupo mensual   🔥 [█████░░░░░] 52% — $52.10 / $100 — queda $47.90 — medio mes consumido
+```
+
+`install.sh` asks for the URL when you install (Enter skips it). To set it
+without the prompt, or to change it later without reinstalling:
+
+```bash
+HANDOFF_USAGE_URL="https://your-gateway.example/usage" \
+HANDOFF_USAGE_TOKEN_CMD="~/.claude/bin/your-token" bash install.sh
+```
+
+**No URL configured is the default, and it means the feature does not exist** —
+no request, no cache file, no line. Installing this version without answering
+the prompt leaves the status bar exactly as it was.
+
+##### What the endpoint has to return
+
+A JSON object with any of `percentUsed`, `spentUsd`, `limitUsd`. Everything else
+is optional and used when present:
+
+| Field | Used for |
+|-------|----------|
+| `percentUsed` | The bar. Missing → computed from `spentUsd / limitUsd` |
+| `spentUsd`, `limitUsd` | The `$52.10 / $100` figures |
+| `remainingUsd` | The `queda $47.90` tail. Missing → computed from limit − spent |
+| `blocked` | `true` paints 🚫 regardless of the percentage — a blocked account at 12% must not read "tranqui, queda mes" |
+
+##### Authentication
+
+Pass a **command that prints the token**, not the token itself
+(`USAGE_TOKEN_CMD`). Rotating credentials are the normal case — a JWT pasted
+into a config file stops working in thirty minutes and never says so. For a
+fixed credential, `USAGE_HEADER` takes a literal header instead.
+
+The token never appears in the command line. `curl -H "Authorization: Bearer …"`
+would expose it to any `ps` on the machine, so the header goes through a curl
+config file written inside a 0700 lock directory and deleted right after.
+
+##### It never blocks, and it never dies quietly
+
+Two properties this line is built around, both of which cost more code than the
+naive version and are the entire reason it is safe to run:
+
+**The render never waits on the network.** `refreshInterval` re-runs the
+statusline every few seconds; a hung DNS lookup with an 8-second timeout would
+freeze the bar for 8 seconds, every minute, forever. The refresh runs detached
+in the background and the render always paints from cache — a fresh install
+shows `⏳ consultando el cupo…` for one interval and then the number. Requests
+are throttled by `USAGE_TTL` (60s) and serialized across concurrent sessions by
+an atomic lock that is reaped by age, so a fetch killed mid-flight cannot wedge
+the line permanently.
+
+**A failure is louder than a success, not quieter.** A line that disappears when
+the token expires is indistinguishable from one that was never configured, and
+that is the failure nobody notices. So: configured means visible, always. The
+last good number survives the error and the error is appended to it, not
+substituted for it:
+
+```
+💳 Cupo mensual   🔥 [█████░░░░░] 52% — $52.10 / $100 — medio mes consumido · dato de hace 22m · ⚠️ HTTP 401 — token rechazado
+```
+
+A response that parses but carries none of the expected fields is treated as a
+failure too. `{"message":"Unauthorized"}` is valid JSON; accepting it would
+paint an invented `0%` wearing the face of real data, which is worse than either
+an error or no line at all.
+
+**Cupo mensual levels:**
+
+| Level | Emoji | Message |
+|-------|-------|---------|
+| < 30% | 😈 | mes entero por delante |
+| 30–50% | 😎 | tranqui, queda mes |
+| 50–70% | 🔥 | medio mes consumido |
+| 70–80% | 🔪 | ojo que se acaba el mes |
+| 80–90% | 💀 | casi sin cupo mensual |
+| ≥ 90% | 🆘 | quedando pato con el mes weón |
+| `blocked` | 🚫 | cuenta bloqueada — no pasa ni una más |
+| no data yet | ⏳ | consultando el cupo… |
+| fetch failed | ⚠️ | the reason, appended to the last known figure |
 
 #### 5-hour countdown
 
@@ -221,6 +316,8 @@ Edit the `# ── CUSTOMIZE` block in `install.sh` before installing — values
 ```bash
 # ── CUSTOMIZE ────────────────────────────────────────────────────────────────
 THRESHOLDS="60 75"   # el último aviso se calcula solo (ver abajo)
+USAGE_URL=""         # endpoint de consumo — vacío = apagado (el installer lo pregunta)
+USAGE_TOKEN_CMD=""   # comando que imprime el token, no el token
 DIALOG_TITLE="Claude Code — Handoff"
 DIALOG_MSG='Context at ${PCT_INT}% — generate handoff snapshot to continue in a new session?'
 CONFIRM_MSG="💾 listo mi shan!! guarda'o el handoff"
@@ -239,6 +336,11 @@ To change after installing, edit the `# ── CUSTOMIZE` block in each file und
 | Compaction reserve (tokens) | `hooks/statusline-context.sh` | `CTX_RESERVE` |
 | Hourly quota emoji + text | `hooks/statusline-context.sh` | `RH90_DOT`, `RH90_MSG`, etc. |
 | Weekly quota emoji + text | `hooks/statusline-context.sh` | `RS90_DOT`, `RS90_MSG`, etc. |
+| Usage endpoint URL | `hooks/statusline-context.sh` | `USAGE_URL` |
+| Usage endpoint token command | `hooks/statusline-context.sh` | `USAGE_TOKEN_CMD` |
+| Usage endpoint literal header | `hooks/statusline-context.sh` | `USAGE_HEADER` |
+| Usage refresh interval / timeout | `hooks/statusline-context.sh` | `USAGE_TTL`, `USAGE_TIMEOUT` |
+| Monthly quota emoji + text | `hooks/statusline-context.sh` | `UM90_DOT`, `UM90_MSG`, etc. |
 
 ### Why these cut points
 
@@ -334,7 +436,7 @@ Note: `THRESHOLDS` controls when the **dialog** fires; the statusline emoji band
 bash test.sh
 ```
 
-Verifies snapshot save logic, install idempotency, PreCompact behavior, statusline safety, monitor threshold/sentinel logic (with mocked dialogs), the dynamic compaction ceiling, spend-budget rendering, and CUSTOMIZE injection robustness. 120 assertions.
+Verifies snapshot save logic, install idempotency, PreCompact behavior, statusline safety, monitor threshold/sentinel logic (with mocked dialogs), the dynamic compaction ceiling, spend-budget rendering, monthly-usage fetch/cache/failure states, and CUSTOMIZE injection robustness. 144 assertions.
 
 ## Security
 
@@ -344,7 +446,18 @@ Every pull request runs three automated checks via GitHub Actions:
 |-------|-------------|
 | ShellCheck | Lints all `.sh` files for errors and unsafe patterns |
 | Tests | Runs the full test suite (`bash test.sh`) |
-| Security scan | Detects dangerous patterns in `hooks/`, `install.sh`, and `commands/` — outbound network calls, base64 decode, raw TCP, netcat, dynamic `exec` |
+| Security scan | Detects dangerous patterns in `hooks/`, `skills/`, `install.sh`, `uninstall.sh` and `test.sh` — outbound network calls, base64 decode, raw TCP, netcat, dynamic `exec`/`eval`, and any request that *uploads* |
+
+The monthly-usage line is the one outbound call in the project, so it is the one
+exemption: a line marked `# net-allow:` is skipped by the scan. The exemption is
+deliberately narrow — it clears that single line and nothing else, it shows up in
+the diff of any PR that adds one, and it does **not** apply to the upload
+patterns (`--data`, `--form`, `-X POST`, `--upload-file`), which fail the scan
+marked or not. Querying and exfiltrating are different things and the gate still
+tells them apart.
+
+Note that the URL is yours to choose, and the token is sent to whatever you
+configure. Point it at your own gateway.
 
 **Branch protection** is active on this repo: all three checks must pass before any PR can merge, and direct pushes to `main` are restricted to the codeowner. For forks, enable it manually in GitHub → Settings → Branches.
 
@@ -391,6 +504,6 @@ Removes all hooks, the `/handoff` command, skills, and surgically cleans `settin
 | `hooks/statusline-context.sh` | Renders the context progress bar in the status line |
 | `hooks/handoff-monitor.sh` | Fires after each response — shows dialog at thresholds |
 | `hooks/pre-compact.sh` | Saves a bash-only mini-snapshot before auto-compaction |
-| `test.sh` | 41 assertions — snapshot logic, install idempotency, PreCompact, statusline safety, monitor thresholds, CUSTOMIZE injection |
+| `test.sh` | 144 assertions — snapshot logic, install idempotency, PreCompact, statusline safety, monitor thresholds, monthly-usage endpoint, CUSTOMIZE injection |
 | `install.sh` | Installs everything into `~/.claude/` |
 | `uninstall.sh` | Removes everything installed |
