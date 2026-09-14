@@ -1085,6 +1085,29 @@ grep -q '^USAGE_TOKEN_CMD=${USAGE_TOKEN_CMD:-mi-token}' "$UI_SL" \
   && pass "el installer inyecta el comando de token" \
   || fail "comando de token no inyectado"
 
+# El aviso de credencial tiene que decir la verdad en los tres casos: ya hubo un
+# installer que imprimía convencido un comportamiento que el código no tenía.
+ui_cred() {  # $1 = HOME · resto = env extra · imprime la línea de credencial
+  local h=$1; shift
+  env -u ANTHROPIC_CUSTOM_HEADERS HANDOFF_USAGE_URL="https://ejemplo.test/usage" "$@" \
+    HOME="$h" bash "$SCRIPT_DIR/install.sh" 2>/dev/null </dev/null | grep -E 'credencial' || true
+}
+UIC_HOME=$(mktemp -d)
+ui_cred "$UIC_HOME" HANDOFF_USAGE_TOKEN_CMD="mi-token" | grep -q '✓ credencial: comando de token' \
+  && pass "installer: avisa que usa el comando de token" || fail "installer: aviso de comando incorrecto"
+UIC_HOME=$(mktemp -d)
+ui_cred "$UIC_HOME" | grep -q '⚠ sin credencial' \
+  && pass "installer: sin credencial lo advierte" || fail "installer: no advirtió la falta de credencial"
+ui_cred "$UIC_HOME" ANTHROPIC_CUSTOM_HEADERS="X-Api: s3cr3t" > "$UIC_HOME/out.txt"
+grep -q 'ANTHROPIC_CUSTOM_HEADERS (entorno)' "$UIC_HOME/out.txt" \
+  && pass "installer: detecta ANTHROPIC_CUSTOM_HEADERS en el entorno" || fail "installer: no vio el header del entorno"
+grep -q 's3cr3t' "$UIC_HOME/out.txt" \
+  && fail "installer: imprimió el valor del header" || pass "installer: no imprime el valor del header"
+UIC_HOME=$(mktemp -d); mkdir -p "$UIC_HOME/.claude"
+echo '{"env":{"ANTHROPIC_CUSTOM_HEADERS":"X-Api: s"}}' > "$UIC_HOME/.claude/settings.json"
+ui_cred "$UIC_HOME" | grep -q 'ANTHROPIC_CUSTOM_HEADERS (settings.json)' \
+  && pass "installer: detecta ANTHROPIC_CUSTOM_HEADERS en settings.json" || fail "installer: no vio el header de settings.json"
+
 # Sin endpoint el installer deja las variables vacías — instalar no puede
 # encender una feature que nadie pidió.
 UI2_HOME=$(mktemp -d)

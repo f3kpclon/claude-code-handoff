@@ -68,7 +68,8 @@ if [ -z "$USAGE_URL" ] && [ "${HANDOFF_NO_PROMPT:-0}" != "1" ] && [ -t 0 ] && [ 
   echo "  Muestra el gasto acumulado de tu cuenta en el statusline."
   read -r -p "  URL: " USAGE_URL || USAGE_URL=""
   if [ -n "$USAGE_URL" ]; then
-    echo "  Comando que imprime el token de acceso (Enter si el endpoint es abierto)."
+    echo "  Comando que imprime el token de acceso (Enter para usar ANTHROPIC_CUSTOM_HEADERS,"
+    echo "  o si el endpoint es abierto)."
     read -r -p "  Comando: " USAGE_TOKEN_CMD || USAGE_TOKEN_CMD=""
   fi
   echo ""
@@ -150,8 +151,19 @@ PYEOF
 chmod +x "$HOOKS_DIR/statusline-context.sh" "$HOOKS_DIR/handoff-monitor.sh" "$HOOKS_DIR/pre-compact.sh"
 if [ -n "$USAGE_URL" ]; then
   echo "✓ endpoint de consumo: $USAGE_URL"
-  if [ -z "$USAGE_TOKEN_CMD" ]; then
-    echo "  (sin comando de token — si el endpoint pide auth, la línea va a mostrar HTTP 401)"
+  # Dice qué credencial va a salir, en el mismo orden que usa el statusline.
+  # Sólo se mira si ANTHROPIC_CUSTOM_HEADERS existe, nunca se imprime su valor.
+  # "Está en el entorno de esta shell" no garantiza que Claude Code se la pase
+  # al statusline, pero sí es la señal más cercana que tiene el installer.
+  if [ -n "$USAGE_TOKEN_CMD" ]; then
+    echo "✓ credencial: comando de token"
+  elif [ -n "${ANTHROPIC_CUSTOM_HEADERS:-}" ]; then
+    echo "✓ credencial: ANTHROPIC_CUSTOM_HEADERS (entorno)"
+  elif python3 -c 'import json,sys; sys.exit(0 if (json.load(open(sys.argv[1])).get("env") or {}).get("ANTHROPIC_CUSTOM_HEADERS") else 1)' \
+         "$CLAUDE_DIR/settings.json" 2>/dev/null; then
+    echo "✓ credencial: ANTHROPIC_CUSTOM_HEADERS (settings.json)"
+  else
+    echo "⚠ sin credencial — si el endpoint pide auth, la línea va a mostrar HTTP 401 — sin credencial"
   fi
 else
   echo "• endpoint de consumo: no configurado (la línea de cupo mensual no se pinta)"
