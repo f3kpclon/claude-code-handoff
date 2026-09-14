@@ -1024,6 +1024,52 @@ grep -qE 'curl[[:space:]].*-H[[:space:]].*Authorization' "$SL" \
   && fail "hay un header con credencial en argv" \
   || pass "ningún header con credencial en argv"
 
+# ── Qué credencial sale, y en qué orden ──────────────────────────────────────
+# file:// ignora los headers, así que se mira el archivo de config que recibe
+# curl(1): un sustituto en PATH lo copia y contesta el código pedido.
+U_SHIM="$U_HOME/shim"; mkdir -p "$U_SHIM"
+cat > "$U_SHIM/curl" <<'SHIM'
+#!/usr/bin/env bash
+cp "$2" "$SHIM_SEEN"
+out=$(sed -n 's/^output = "\(.*\)"$/\1/p' "$2")
+echo '{"message":"Unauthorized"}' > "$out"
+printf '%s' "${SHIM_CODE:-401}"
+SHIM
+chmod +x "$U_SHIM/curl"
+u_auth() {  # env extra como argumentos: VAR=valor ...
+  rm -rf "$U_LOCK"; rm -f "$U_HOME/.claude/usage.json" "$U_HOME/seen"
+  # HOME en la misma línea que el statusline: el guard de HOME filtra por línea.
+  echo "$U_PAYLOAD" | env -u ANTHROPIC_CUSTOM_HEADERS -u USAGE_HEADER -u USAGE_TOKEN_CMD \
+    COLUMNS=80 USAGE_TTL=0 USAGE_URL="https://x.test/usage" PATH="$U_SHIM:$PATH" \
+    SHIM_SEEN="$U_HOME/seen" "$@" HOME="$U_HOME" bash "$SL" >/dev/null 2>&1
+  local n=0
+  while [ -d "$U_LOCK" ] && [ "$n" -lt 40 ]; do sleep 0.25; n=$((n+1)); done
+}
+
+u_auth USAGE_TOKEN_CMD="echo tok1" USAGE_HEADER="X-Fijo: f" ANTHROPIC_CUSTOM_HEADERS="X-Cc: c"
+grep -qx 'header = "Authorization: Bearer tok1"' "$U_HOME/seen" 2>/dev/null \
+  && [ "$(grep -c '^header' "$U_HOME/seen")" = 1 ] \
+  && pass "el comando del token manda sobre los headers fijos" \
+  || fail "orden de credenciales: $(grep '^header' "$U_HOME/seen" 2>/dev/null | tr '\n' '|')"
+
+u_auth USAGE_TOKEN_CMD="true" ANTHROPIC_CUSTOM_HEADERS="X-Cc: c"
+grep -qx 'header = "X-Cc: c"' "$U_HOME/seen" 2>/dev/null \
+  && pass "comando sin token → cae a ANTHROPIC_CUSTOM_HEADERS" \
+  || fail "no cayó al header de Claude Code"
+
+u_auth ANTHROPIC_CUSTOM_HEADERS=$'Authorization: Bearer a\nX-Org: b'
+[ "$(grep -c '^header = ' "$U_HOME/seen" 2>/dev/null)" = 2 ] \
+  && pass "varios headers (uno por línea) salen como headers separados" \
+  || fail "headers múltiples mal armados: $(grep '^header' "$U_HOME/seen" 2>/dev/null | tr '\n' '|')"
+jq -r '.error' "$U_HOME/.claude/usage.json" 2>/dev/null | grep -q 'token rechazado' \
+  && pass "401 con credencial dice 'token rechazado'" || fail "401 con credencial: mensaje incorrecto"
+
+u_auth
+grep -q '^header' "$U_HOME/seen" 2>/dev/null \
+  && fail "sin credencial igual mandó un header" || pass "sin credencial la consulta sale sin header"
+jq -r '.error' "$U_HOME/.claude/usage.json" 2>/dev/null | grep -q 'sin credencial' \
+  && pass "401 sin credencial dice 'sin credencial'" || fail "401 sin credencial: mensaje incorrecto"
+
 # El installer inyecta la URL SIN matar el override por entorno: cambiar de
 # endpoint no puede obligar a reinstalar.
 UI_HOME=$(mktemp -d)
@@ -1038,6 +1084,29 @@ grep -q '^USAGE_URL=${USAGE_URL:-https://ejemplo.test/usage}' "$UI_SL" \
 grep -q '^USAGE_TOKEN_CMD=${USAGE_TOKEN_CMD:-mi-token}' "$UI_SL" \
   && pass "el installer inyecta el comando de token" \
   || fail "comando de token no inyectado"
+
+# El aviso de credencial tiene que decir la verdad en los tres casos: ya hubo un
+# installer que imprimía convencido un comportamiento que el código no tenía.
+ui_cred() {  # $1 = HOME · resto = env extra · imprime la línea de credencial
+  local h=$1; shift
+  env -u ANTHROPIC_CUSTOM_HEADERS HANDOFF_USAGE_URL="https://ejemplo.test/usage" "$@" \
+    HOME="$h" bash "$SCRIPT_DIR/install.sh" 2>/dev/null </dev/null | grep -E 'credencial' || true
+}
+UIC_HOME=$(mktemp -d)
+ui_cred "$UIC_HOME" HANDOFF_USAGE_TOKEN_CMD="mi-token" | grep -q '✓ credencial: comando de token' \
+  && pass "installer: avisa que usa el comando de token" || fail "installer: aviso de comando incorrecto"
+UIC_HOME=$(mktemp -d)
+ui_cred "$UIC_HOME" | grep -q '⚠ sin credencial' \
+  && pass "installer: sin credencial lo advierte" || fail "installer: no advirtió la falta de credencial"
+ui_cred "$UIC_HOME" ANTHROPIC_CUSTOM_HEADERS="X-Api: s3cr3t" > "$UIC_HOME/out.txt"
+grep -q 'ANTHROPIC_CUSTOM_HEADERS (entorno)' "$UIC_HOME/out.txt" \
+  && pass "installer: detecta ANTHROPIC_CUSTOM_HEADERS en el entorno" || fail "installer: no vio el header del entorno"
+grep -q 's3cr3t' "$UIC_HOME/out.txt" \
+  && fail "installer: imprimió el valor del header" || pass "installer: no imprime el valor del header"
+UIC_HOME=$(mktemp -d); mkdir -p "$UIC_HOME/.claude"
+echo '{"env":{"ANTHROPIC_CUSTOM_HEADERS":"X-Api: s"}}' > "$UIC_HOME/.claude/settings.json"
+ui_cred "$UIC_HOME" | grep -q 'ANTHROPIC_CUSTOM_HEADERS (settings.json)' \
+  && pass "installer: detecta ANTHROPIC_CUSTOM_HEADERS en settings.json" || fail "installer: no vio el header de settings.json"
 
 # Sin endpoint el installer deja las variables vacías — instalar no puede
 # encender una feature que nadie pidió.

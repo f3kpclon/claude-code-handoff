@@ -148,6 +148,18 @@ Pass a **command that prints the token**, not the token itself
 into a config file stops working in thirty minutes and never says so. For a
 fixed credential, `USAGE_HEADER` takes a literal header instead.
 
+All three sources are optional and tried in this order — the first one that
+yields something wins:
+
+1. `USAGE_TOKEN_CMD` → `Authorization: Bearer <output>` (the only one that renews itself)
+2. `USAGE_HEADER` → literal header
+3. `$ANTHROPIC_CUSTOM_HEADERS` → the variable Claude Code already sends to its
+   gateway (`Name: Value`, newline-separated); each line goes out as its own header
+
+With none, the request still goes out without credentials — open endpoints
+work, and a closed one shows `⚠️ HTTP 401 — sin credencial` instead of hiding
+the line. A credential that was sent and refused shows `token rechazado`.
+
 The token never appears in the command line. `curl -H "Authorization: Bearer …"`
 would expose it to any `ps` on the machine, so the header goes through a curl
 config file written inside a 0700 lock directory and deleted right after.
