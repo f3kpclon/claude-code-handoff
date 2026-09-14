@@ -1026,7 +1026,7 @@ grep -qE 'curl[[:space:]].*-H[[:space:]].*Authorization' "$SL" \
 
 # ── Qué credencial sale, y en qué orden ──────────────────────────────────────
 # file:// ignora los headers, así que se mira el archivo de config que recibe
-# curl: un curl falso en PATH lo copia y contesta el código pedido.
+# curl(1): un sustituto en PATH lo copia y contesta el código pedido.
 U_SHIM="$U_HOME/shim"; mkdir -p "$U_SHIM"
 cat > "$U_SHIM/curl" <<'SHIM'
 #!/usr/bin/env bash
