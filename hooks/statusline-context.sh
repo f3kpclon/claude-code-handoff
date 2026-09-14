@@ -136,7 +136,8 @@ USAGE_URL=${USAGE_URL:-}
 # en disco no se renueva solo). Se ejecuta sólo cuando toca refrescar.
 USAGE_TOKEN_CMD=${USAGE_TOKEN_CMD:-}
 # Alternativa para endpoints con credencial fija: header literal, tal cual va.
-# Si están los dos, manda este.
+# Orden: USAGE_TOKEN_CMD → USAGE_HEADER → $ANTHROPIC_CUSTOM_HEADERS (la de
+# Claude Code). Todas opcionales; sin ninguna, la consulta sale sin credencial.
 USAGE_HEADER=${USAGE_HEADER:-}
 # Cada cuánto se refresca. El gasto mensual se mueve lento, así que el techo
 # no lo pone la frescura del dato sino el gateway del otro lado: con
@@ -541,20 +542,28 @@ if [ -n "$USAGE_URL" ]; then
 
     # Refresca y deja el resultado en $USAGE_FILE. Corre en segundo plano.
     usage_fetch() {
-        local tok hdr cfg body code rc prev_data prev_fetched now_ts out
+        local tok hdrs line nhdr cfg body code rc prev_data prev_fetched now_ts out
         cfg="$USAGE_LOCK/req"; body="$USAGE_LOCK/body"; out="$USAGE_LOCK/out"
 
-        hdr="$USAGE_HEADER"
-        if [ -z "$hdr" ] && [ -n "$USAGE_TOKEN_CMD" ]; then
+        # Credencial, la primera que aparezca — todas opcionales:
+        #  1. USAGE_TOKEN_CMD  → Authorization: Bearer <lo que imprima>
+        #  2. USAGE_HEADER     → header literal, propio de esta línea
+        #  3. ANTHROPIC_CUSTOM_HEADERS → la misma que ya usa Claude Code contra
+        #     su gateway. Formato documentado: "Name: Value", uno por línea.
+        # El comando va primero porque es el único que se renueva solo: si el
+        # token rota, un header fijo de respaldo ya venció hace rato.
+        # Sin ninguna, la consulta sale igual: hay endpoints abiertos, y uno
+        # cerrado lo dice con un 401 en pantalla en vez de apagar la línea.
+        hdrs=""; nhdr=0
+        if [ -n "$USAGE_TOKEN_CMD" ]; then
             # bash -c y no eval: el scan de seguridad del CI lo rechaza, y
             # tiene razón — acá alcanza con ejecutar el comando tal cual, que
             # además expande el ~ del path igual que lo haría el usuario.
             tok=$(bash -c "$USAGE_TOKEN_CMD" 2>/dev/null | tr -d '\r\n')
-            # En el archivo de config de curl, " y \ son sintaxis. Ningún JWT
-            # los lleva, pero un token roto no puede convertirse en opciones.
-            tok=${tok//\"/}; tok=${tok//\\/}
-            [ -n "$tok" ] && hdr="Authorization: Bearer $tok"
+            [ -n "$tok" ] && hdrs="Authorization: Bearer $tok"
         fi
+        [ -z "$hdrs" ] && hdrs="$USAGE_HEADER"
+        [ -z "$hdrs" ] && hdrs="${ANTHROPIC_CUSTOM_HEADERS:-}"
 
         {
             printf 'url = "%s"\n' "${USAGE_URL//\"/}"
@@ -562,7 +571,15 @@ if [ -n "$USAGE_URL" ]; then
             printf 'silent\n'
             printf 'max-time = %s\n' "$USAGE_TIMEOUT"
             printf 'write-out = "%%{http_code}"\n'
-            [ -n "$hdr" ] && printf 'header = "%s"\n' "$hdr"
+            # Un header por línea: meter varios en un solo -H manda un header
+            # roto. En el archivo de config de curl, " y \ son sintaxis; ningún
+            # token los lleva, pero uno roto no puede convertirse en opciones.
+            while IFS= read -r line; do
+                line=${line//$'\r'/}; line=${line//\"/}; line=${line//\\/}
+                case "$line" in
+                    *:*) printf 'header = "%s"\n' "$line"; nhdr=$((nhdr+1)) ;;
+                esac
+            done <<< "$hdrs"
         } > "$cfg"
 
         # La consulta, y la única: un GET sin cuerpo al endpoint que el
@@ -597,7 +614,15 @@ if [ -n "$USAGE_URL" ]; then
         # file:// devuelve 000 y no es un error — es como se prueba esto sin red.
         case "$code" in
             200|000) ;;
-            401|403) usage_write_err "HTTP $code — token rechazado"; return ;;
+            # Sin credencial y con credencial rechazada piden arreglos distintos:
+            # uno es configurar algo, el otro es renovar el token.
+            401|403)
+                if [ "$nhdr" -gt 0 ]; then
+                    usage_write_err "HTTP $code — token rechazado"
+                else
+                    usage_write_err "HTTP $code — sin credencial"
+                fi
+                return ;;
             *)       usage_write_err "HTTP $code"; return ;;
         esac
         # Un 401 devuelve JSON válido ({"message":"Unauthorized"}) con rc 0. Que

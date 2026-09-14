@@ -1024,6 +1024,52 @@ grep -qE 'curl[[:space:]].*-H[[:space:]].*Authorization' "$SL" \
   && fail "hay un header con credencial en argv" \
   || pass "ningún header con credencial en argv"
 
+# ── Qué credencial sale, y en qué orden ──────────────────────────────────────
+# file:// ignora los headers, así que se mira el archivo de config que recibe
+# curl: un curl falso en PATH lo copia y contesta el código pedido.
+U_SHIM="$U_HOME/shim"; mkdir -p "$U_SHIM"
+cat > "$U_SHIM/curl" <<'SHIM'
+#!/usr/bin/env bash
+cp "$2" "$SHIM_SEEN"
+out=$(sed -n 's/^output = "\(.*\)"$/\1/p' "$2")
+echo '{"message":"Unauthorized"}' > "$out"
+printf '%s' "${SHIM_CODE:-401}"
+SHIM
+chmod +x "$U_SHIM/curl"
+u_auth() {  # env extra como argumentos: VAR=valor ...
+  rm -rf "$U_LOCK"; rm -f "$U_HOME/.claude/usage.json" "$U_HOME/seen"
+  # HOME en la misma línea que el statusline: el guard de HOME filtra por línea.
+  echo "$U_PAYLOAD" | env -u ANTHROPIC_CUSTOM_HEADERS -u USAGE_HEADER -u USAGE_TOKEN_CMD \
+    COLUMNS=80 USAGE_TTL=0 USAGE_URL="https://x.test/usage" PATH="$U_SHIM:$PATH" \
+    SHIM_SEEN="$U_HOME/seen" "$@" HOME="$U_HOME" bash "$SL" >/dev/null 2>&1
+  local n=0
+  while [ -d "$U_LOCK" ] && [ "$n" -lt 40 ]; do sleep 0.25; n=$((n+1)); done
+}
+
+u_auth USAGE_TOKEN_CMD="echo tok1" USAGE_HEADER="X-Fijo: f" ANTHROPIC_CUSTOM_HEADERS="X-Cc: c"
+grep -qx 'header = "Authorization: Bearer tok1"' "$U_HOME/seen" 2>/dev/null \
+  && [ "$(grep -c '^header' "$U_HOME/seen")" = 1 ] \
+  && pass "el comando del token manda sobre los headers fijos" \
+  || fail "orden de credenciales: $(grep '^header' "$U_HOME/seen" 2>/dev/null | tr '\n' '|')"
+
+u_auth USAGE_TOKEN_CMD="true" ANTHROPIC_CUSTOM_HEADERS="X-Cc: c"
+grep -qx 'header = "X-Cc: c"' "$U_HOME/seen" 2>/dev/null \
+  && pass "comando sin token → cae a ANTHROPIC_CUSTOM_HEADERS" \
+  || fail "no cayó al header de Claude Code"
+
+u_auth ANTHROPIC_CUSTOM_HEADERS=$'Authorization: Bearer a\nX-Org: b'
+[ "$(grep -c '^header = ' "$U_HOME/seen" 2>/dev/null)" = 2 ] \
+  && pass "varios headers (uno por línea) salen como headers separados" \
+  || fail "headers múltiples mal armados: $(grep '^header' "$U_HOME/seen" 2>/dev/null | tr '\n' '|')"
+jq -r '.error' "$U_HOME/.claude/usage.json" 2>/dev/null | grep -q 'token rechazado' \
+  && pass "401 con credencial dice 'token rechazado'" || fail "401 con credencial: mensaje incorrecto"
+
+u_auth
+grep -q '^header' "$U_HOME/seen" 2>/dev/null \
+  && fail "sin credencial igual mandó un header" || pass "sin credencial la consulta sale sin header"
+jq -r '.error' "$U_HOME/.claude/usage.json" 2>/dev/null | grep -q 'sin credencial' \
+  && pass "401 sin credencial dice 'sin credencial'" || fail "401 sin credencial: mensaje incorrecto"
+
 # El installer inyecta la URL SIN matar el override por entorno: cambiar de
 # endpoint no puede obligar a reinstalar.
 UI_HOME=$(mktemp -d)
