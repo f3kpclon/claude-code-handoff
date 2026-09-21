@@ -53,7 +53,7 @@ New session         → paste snapshot → Claude confirms and resumes
 
 ### Status bar
 
-The status bar renders up to 6 lines depending on your plan and configuration:
+The status bar renders up to 7 lines depending on your plan and configuration:
 
 ```
 [claude-sonnet-4-6] | Branch: 🌿 main +1 ~2 | 💰 $0.03
@@ -61,13 +61,28 @@ The status bar renders up to 6 lines depending on your plan and configuration:
 ⏱ Cupo horario   🔪 [███████████████░░░░░] 75% — 1h12m — se acaba el turno weón
 📅 Cupo semanal  😎 [████░░░░░░░░░░░░░░░░] 23% — tranqui, semana larga
 💳 Cupo mensual  😎 [███████░░░░░░░░░░░░░] 34% — $34.10 / $100 — queda $65.90 — tranqui, queda mes
+🗂 Índice         ✅ al día — +0 ~1 -0 files · 0.7s · hace 3m
 ```
 
 **Line 1** — always shown: active model ID, git branch + staged/modified count, session cost.  
 **Line 2** — always shown: session context window usage bar.  
 **Lines 3–4** — Pro/Max only: 5-hour rolling quota and 7-day weekly quota bars.  
 **Line 5** — API key only: session spend against a budget you set (see below).  
-**Line 6** — only if you configure a usage endpoint: your account's month-to-date spend (see below).
+**Line 6** — only if you configure a usage endpoint: your account's month-to-date spend (see below).  
+**Line 7** — only if [codebase-indexer](https://github.com/f3kpclon/codebase-indexer) is installed: the state of this project's index (see below).
+
+#### Index state (codebase-indexer)
+
+codebase-indexer reindexes in the background when a session opens and closes. Its SessionStart notice prints once, so it keeps saying "Indexing…" after the work is done. This line is the one that updates:
+
+| State | Line |
+|---|---|
+| Finished | `✅ al día — <what changed> · <duration> · hace <age>` |
+| Running | `⏳ indexando en background…` |
+| Worker gone (running > 15 min) | `⚠️ el indexado anterior no terminó — se reintenta en la próxima sesión` |
+| Failed | `❌ falló — <error>` |
+
+It reads `~/.codebase-indexer/repos/<name>-<sha256(path)[:8]>/index-status.json`, the file the hook writes, keyed by the project directory (`workspace.project_dir`) with symlinks resolved as the hook resolves them. It is cached for 3 seconds, like the git part. No `~/.codebase-indexer`, or no state for this project yet: no line, and the statusline still exits 0.
 
 #### Spend budget (API key)
 
