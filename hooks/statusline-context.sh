@@ -181,7 +181,8 @@ JQ_OUT=$(echo "$input" | jq -r '
   (.rate_limits.five_hour.resets_at        // ""),
   (.rate_limits.seven_day.used_percentage  // ""),
   (.rate_limits.seven_day.resets_at        // ""),
-  (now | floor)
+  (now | floor),
+  (.workspace.project_dir // .workspace.current_dir // .cwd // "")
 ' 2>/dev/null)
 
 # Bloque { } y no un pipe: un pipe correría los `read` en un subshell y las
@@ -199,6 +200,7 @@ JQ_OUT=$(echo "$input" | jq -r '
     IFS= read -r SEVEN_D
     IFS= read -r SEVEN_D_RESET
     IFS= read -r NOW
+    IFS= read -r PROJ
 } <<< "$JQ_OUT"
 
 [ -z "$used" ] && exit 0
@@ -292,7 +294,7 @@ if [ -n "$SID" ]; then
         # Stamped BEFORE the sweep: if the find dies, the next run waits an hour
         # instead of retrying the expensive scan every single second.
         printf '%s' "$NOW" > "$HK"
-        find "$CTX_DIR" \( -name '*.pct' -o -name '*.compact' -o -name '*.tok' -o -name '*.tier' -o -name 'handoff_w*' -o -name 'effort_w*' -o -name 'gitpart_*' \) -mmin +1440 -delete 2>/dev/null
+        find "$CTX_DIR" \( -name '*.pct' -o -name '*.compact' -o -name '*.tok' -o -name '*.tier' -o -name 'handoff_w*' -o -name 'effort_w*' -o -name 'gitpart_*' -o -name 'idxpart_*' \) -mmin +1440 -delete 2>/dev/null
     fi
 fi
 pct_int=$(( ${used%.*} ))
@@ -731,4 +733,95 @@ if [ -n "$USAGE_URL" ]; then
             "$dot" "$color" "$(make_bar "$u_bar")" "$u_int" \
             "$U_SPENT_FMT" "${U_LIMIT:-?}" "$U_REM_FMT" "$msg" "$U_SUFFIX" "$RESET"
     fi
+fi
+
+# ── Line 7: Índice (codebase-indexer) — sólo si está instalado ───────────────
+# El hook de codebase-indexer indexa en background al abrir y cerrar sesión, y
+# su aviso de SessionStart se imprime una sola vez: queda diciendo "Indexing…"
+# aunque el índice haya terminado medio segundo después. Esta línea es la que
+# se actualiza sola — ⏳ mientras corre, ✅ cuando termina.
+#
+# Lee el mismo archivo que escribe el hook, bajo la misma clave: la carpeta del
+# proyecto (CLAUDE_PROJECT_DIR = workspace.project_dir), resuelta, en
+# ~/.codebase-indexer/repos/<nombre>-<sha256(ruta)[:8]>/index-status.json.
+# Sin ese directorio la línea no existe: nada cambia para quien no lo usa.
+#
+# Cacheada como la parte de git: el hash y el jq cuestan ~10 ms y el estado
+# cambia un par de veces por sesión, no cada segundo.
+IDX_ROOT="$HOME/.codebase-indexer/repos"
+IDX_TTL=3
+IDX_STALE_SECS=900   # mismo corte que usa el hook para dar por muerto un worker
+if [ -n "$PROJ" ] && [ -d "$IDX_ROOT" ]; then
+    IDX_CACHE="$CTX_DIR/idxpart_${PROJ//\//_}"
+    idx_c=""
+    [ -f "$IDX_CACHE" ] && idx_c=$(<"$IDX_CACHE")
+    idx_ts="${idx_c%%|*}"
+    case "$idx_ts" in ''|*[!0-9]*) idx_ts=-1 ;; esac
+
+    if [ "$idx_ts" -ge 0 ] && [ $(( NOW - idx_ts )) -lt "$IDX_TTL" ]; then
+        IDX_LINE="${idx_c#*|}"
+    else
+        IDX_LINE=""
+        # Resuelta como la resuelve el hook (Path.resolve): en macOS /tmp y
+        # /var son symlinks, y la clave se calcula sobre la ruta real.
+        proj_real=$(cd "$PROJ" 2>/dev/null && pwd -P) || proj_real="$PROJ"
+        if command -v shasum >/dev/null 2>&1; then
+            idx_hash=$(printf '%s' "$proj_real" | shasum -a 256 2>/dev/null)
+        else
+            idx_hash=$(printf '%s' "$proj_real" | sha256sum 2>/dev/null)
+        fi
+        idx_file="$IDX_ROOT/${proj_real##*/}-${idx_hash:0:8}/index-status.json"
+        if [ -n "$idx_hash" ] && [ -f "$idx_file" ]; then
+            IDX_OUT=$(jq -r '
+              (.state // ""),
+              (.summary // ""),
+              (.duration_ms // "" | tostring),
+              (.finished // "" | tostring | split(".")[0]),
+              (.started // "" | tostring | split(".")[0]),
+              ((.error // "") | gsub("\n"; " "))
+            ' "$idx_file" 2>/dev/null)
+            {
+                IFS= read -r I_STATE
+                IFS= read -r I_SUMMARY
+                IFS= read -r I_MS
+                IFS= read -r I_FIN
+                IFS= read -r I_START
+                IFS= read -r I_ERR
+            } <<< "$IDX_OUT"
+            case "$I_FIN"   in ''|*[!0-9]*) I_FIN=0 ;; esac
+            case "$I_START" in ''|*[!0-9]*) I_START=0 ;; esac
+            case "$I_MS"    in ''|*[!0-9]*) I_MS="" ;; esac
+
+            case "$I_SUMMARY" in
+                unchanged) I_SUMMARY="sin cambios" ;;
+                reindexed) I_SUMMARY="reindexado completo" ;;
+            esac
+            I_DUR=""
+            [ -n "$I_MS" ] && I_DUR=" · $(( I_MS / 1000 )).$(( (I_MS % 1000) / 100 ))s"
+
+            case "$I_STATE" in
+                done)
+                    I_AGO=""
+                    if [ "$I_FIN" -gt 0 ]; then fmt_left $(( NOW - I_FIN )); I_AGO=" · hace ${FMT_LEFT}"; fi
+                    IDX_LINE="🗂 Índice         ✅ ${GREEN}al día — ${I_SUMMARY:-listo}${I_DUR}${I_AGO}${RESET}"
+                    ;;
+                running)
+                    if [ "$I_START" -gt 0 ] && [ $(( NOW - I_START )) -ge "$IDX_STALE_SECS" ]; then
+                        IDX_LINE="🗂 Índice         ⚠️ ${YELLOW}el indexado anterior no terminó — se reintenta en la próxima sesión${RESET}"
+                    else
+                        IDX_LINE="🗂 Índice         ⏳ ${YELLOW}indexando en background…${RESET}"
+                    fi
+                    ;;
+                error)
+                    IDX_LINE="🗂 Índice         ❌ ${RED}falló — ${I_ERR:0:80}${RESET}"
+                    ;;
+            esac
+        fi
+        [ -d "$CTX_DIR" ] || mkdir -p "$CTX_DIR"
+        printf '%s|%s' "$NOW" "$IDX_LINE" > "$IDX_CACHE"
+    fi
+    # if y no `[ ] && echo`: como última instrucción del script, un `&&` que no
+    # imprime deja el exit status en 1 y el statusline entero "falla" en cada
+    # proyecto sin estado de índice.
+    if [ -n "$IDX_LINE" ]; then echo "$IDX_LINE"; fi
 fi

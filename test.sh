@@ -1152,6 +1152,89 @@ PY
 rm -rf "$UI3_HOME"
 rm -rf "$U_HOME" "$UI_HOME" "$UI2_HOME"
 
+# ── Test: línea del Índice (codebase-indexer) ────────────────────────────────
+echo "Índice: estado del codebase-indexer en la barra"
+
+IX_HOME=$(mktemp -d)
+mkdir -p "$IX_HOME/.claude"
+IX_PROJ=$(mktemp -d)
+# El payload recibe un symlink al proyecto: el hook guarda el estado bajo la
+# ruta RESUELTA, y la barra tiene que resolverla igual para encontrarlo. No se
+# confía en que mktemp devuelva /var (symlink en macOS): depende de TMPDIR.
+IX_LINK="$IX_HOME/proj-link"
+ln -s "$IX_PROJ" "$IX_LINK"
+
+# La clave del archivo se calcula con Python (hashlib), igual que
+# codebase_indexer.constants._index_dir — un juez independiente del shasum que
+# usa el script, no una copia de su misma lógica.
+ix_dir() {
+  python3 - "$IX_PROJ" "$IX_HOME" <<'PY'
+import hashlib, pathlib, sys
+p = pathlib.Path(sys.argv[1]).resolve()
+print(f"{sys.argv[2]}/.codebase-indexer/repos/{p.name}-{hashlib.sha256(str(p).encode()).hexdigest()[:8]}")
+PY
+}
+ix_status() {  # $1 = JSON del index-status.json
+  local d; d=$(ix_dir); mkdir -p "$d"; printf '%s' "$1" > "$d/index-status.json"
+  rm -f "$IX_HOME/.claude/ctx/"idxpart_*   # sin caché entre casos
+}
+ix_render() {
+  printf '{"model":{"id":"claude-opus-5"},"workspace":{"current_dir":"%s","project_dir":"%s"},"cost":{"total_cost_usd":1},"context_window":{"used_percentage":42},"session_id":"ix"}' \
+    "$IX_LINK" "$IX_LINK" | HOME="$IX_HOME" COLUMNS=80 bash "$SL" 2>/dev/null
+}
+
+IX_NOW=$(date +%s)
+IX_OUT=$(ix_render)
+echo "$IX_OUT" | grep -q 'Índice' \
+  && fail "sin ~/.codebase-indexer no debe haber línea de Índice" \
+  || pass "sin codebase-indexer instalado, la línea no aparece"
+
+# Instalado pero sin estado para este proyecto (nunca abrió sesión ahí): sin
+# línea, y el statusline tiene que terminar en 0 igual. Se corre fuera de
+# $(...) a propósito: con set -e un exit != 0 ahí abortaría la suite entera en
+# vez de marcar el fallo.
+mkdir -p "$IX_HOME/.codebase-indexer/repos"
+if ix_render >/dev/null; then
+  pass "sin estado para el proyecto: exit 0"
+else
+  fail "sin estado para el proyecto el statusline termina con error"
+fi
+
+ix_status "{\"state\":\"done\",\"summary\":\"+0 ~1 -0 files\",\"duration_ms\":700,\"finished\":$(( IX_NOW - 150 )).5}"
+IX_OUT=$(ix_render)
+echo "$IX_OUT" | grep -q '✅ .*al día — +0 ~1 -0 files · 0.7s · hace 2m' \
+  && pass "done: resumen, duración y antigüedad" || fail "done mal pintado: $(echo "$IX_OUT" | grep Índice)"
+
+ix_status "{\"state\":\"done\",\"summary\":\"unchanged\",\"duration_ms\":450,\"finished\":$IX_NOW}"
+IX_OUT=$(ix_render)
+echo "$IX_OUT" | grep -q 'al día — sin cambios · 0.4s' \
+  && pass "done/unchanged se lee como 'sin cambios'" || fail "unchanged sin traducir"
+
+ix_status "{\"state\":\"running\",\"started\":$(( IX_NOW - 5 ))}"
+IX_OUT=$(ix_render)
+echo "$IX_OUT" | grep -q '⏳ .*indexando' \
+  && pass "running reciente: indexando" || fail "running no se pinta"
+
+ix_status "{\"state\":\"running\",\"started\":$(( IX_NOW - 2000 ))}"
+IX_OUT=$(ix_render)
+echo "$IX_OUT" | grep -q '⚠️ .*no terminó' \
+  && pass "running viejo (>900s): worker muerto, no 'indexando'" || fail "worker muerto se pinta como vivo"
+
+ix_status '{"state":"error","error":"boom\nsecond line"}'
+IX_OUT=$(ix_render)
+echo "$IX_OUT" | grep -q '❌ .*falló — boom second line' \
+  && pass "error: mensaje en una sola línea" || fail "error mal pintado"
+
+# Caché: dentro del TTL no relee el archivo; lo que cambie se ve al vencer.
+ix_status "{\"state\":\"running\",\"started\":$IX_NOW}"
+ix_render >/dev/null
+printf '%s' "{\"state\":\"done\",\"summary\":\"unchanged\",\"finished\":$IX_NOW}" > "$(ix_dir)/index-status.json"
+IX_OUT=$(ix_render)
+echo "$IX_OUT" | grep -q 'indexando' \
+  && pass "dentro del TTL usa la caché" || fail "no cachea: relee en cada render"
+
+rm -rf "$IX_HOME" "$IX_PROJ"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
